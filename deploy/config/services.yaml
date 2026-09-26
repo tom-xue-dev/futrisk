@@ -1,0 +1,37 @@
+# Endpoints, docker profile (01 §7.2 D2; 02 §3): the demo profile with 127.0.0.1 replaced by the
+# compose service names. deploy/init_config.py installs this file as <home>/config/services.yaml
+# of the shared config volume when that volume is initialised (a later change of this file needs
+# a fresh config volume: endpoint changes are restart-only, config reload refuses them).
+#
+# Every service binds its own PUB/ROUTER on its service name - libzmq (4.3.5, pyzmq 27) resolves
+# the name to the container's address on the compose network - and connects to the others by
+# name. api-gateway serves HTTP on 0.0.0.0 inside its container; compose publishes only that
+# port (127.0.0.1:8000 on the host).
+#
+# The supervisor runs in clock-only mode (compose `supervisor` service: `futrisk up --clock-only`):
+# docker restart policies manage the processes, the supervisor only owns the market clock.
+#   - every service follows its sys.clock (and waits for it at start-up); sim-exchange adopts it
+#     when it starts (ctl.snapshot), later jumps reach it through api-gateway;
+#   - app.mode=demo: the first start puts the market at app.demo.start_at (null: the next
+#     trading day's 08:58, two minutes before the open); the clock state lives in supervisor.db
+#     (the supervisor's volume) and keeps running with the wall clock across restarts;
+#   - clock jumps work: POST /api/v1/demo/clock, `futrisk clock jump --to 09:30|next-open|pre-close`;
+#   - svc.ps answers with no items; svc.start/stop/restart/kill of an instance answer
+#     PRECONDITION_FAILED ("clock-only mode manages no processes").
+profile: docker
+bus:
+  heartbeat_ms: 1000
+  peer_timeout_missed: 3
+  hang_threshold_ms: 30000
+  pub_hwm: 10000
+  md_pub_hwm: 100000
+  router_hwm: 1000
+  replay_window_days: 7
+instances:
+  md-gateway:      {pub: "tcp://md-gateway:7101", router: "tcp://md-gateway:7102"}
+  trade-gateway:   {pub: "tcp://trade-gateway:7201", router: "tcp://trade-gateway:7202"}
+  risk-engine-0:   {pub: "tcp://risk-engine-0:7301", router: "tcp://risk-engine-0:7302", shard: 0, coordinator: true}
+  risk-engine-1:   {pub: "tcp://risk-engine-1:7311", router: "tcp://risk-engine-1:7312", shard: 1}
+  clearing-worker: {pub: "tcp://clearing-worker:7401", router: "tcp://clearing-worker:7402"}
+  api-gateway:     {pub: "tcp://api-gateway:7501", router: "tcp://api-gateway:7502", http: "http://0.0.0.0:8000"}
+  supervisor:      {pub: "tcp://supervisor:7601", router: "tcp://supervisor:7602"}

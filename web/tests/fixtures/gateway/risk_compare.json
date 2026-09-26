@@ -1,0 +1,1 @@
+{"ok":true,"code":"OK","message":"","data":{"trading_day":"","as_of_ns":0,"accounts":[],"rules":["daily_loss","intraday_dd","hwm_dd","nav_floor","risk_degree","product_exposure","concentration","sector_exposure","leverage","limit_stress","compliance"],"matrix":[],"ranking":[],"exposure":{"products":[],"accounts":[],"cells":[],"firm_net":{}}}}

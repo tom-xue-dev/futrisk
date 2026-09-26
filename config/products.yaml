@@ -1,0 +1,273 @@
+# Exchange rules, products, contracts and session templates (01 §8.9, §8.15).
+# Values are examples verified against exchange data around 2026-09-24;
+# production must take them from the latest exchange notices.
+
+session_templates:
+  night_2100_2300: [["20:55", "21:00", "auction"], ["21:00", "23:00", "continuous"]]
+  night_2100_0100: [["20:55", "21:00", "auction"], ["21:00", "01:00", "continuous"]]
+  night_2100_0230: [["20:55", "21:00", "auction"], ["21:00", "02:30", "continuous"]]
+  day_commodity:
+    - ["08:55", "09:00", "auction_no_night"]
+    - ["09:00", "10:15", "continuous"]
+    - ["10:30", "11:30", "continuous"]
+    - ["13:30", "15:00", "continuous"]
+  day_index:
+    - ["09:25", "09:30", "auction"]
+    - ["09:30", "11:30", "continuous"]
+    - ["13:00", "15:00", "continuous"]
+  day_treasury:
+    - ["09:25", "09:30", "auction"]
+    - ["09:30", "11:30", "continuous"]
+    - ["13:00", "15:15", "continuous"]
+
+exchanges:
+  SHFE:
+    explicit_close_today: true
+    close_style: FIFO
+    close_today_fee_rule: LOT_MATCH
+    settle_rounding: FLOOR_TICK
+    settle_fallback: [MEDIAN, LIMIT, PRE_SETTLE]
+    big_side: SAME_PRODUCT
+    big_side_exit: LAST_TRADE_DAY_MINUS_5
+    cancel_limit: 500
+    large_cancel: {count: 50, min_qty: 300}
+    self_trade_limit: 5
+  DCE:
+    explicit_close_today: false
+    close_style: FIFO
+    close_today_fee_rule: INTRADAY_BOTH_LEGS
+    settle_rounding: ROUND_TICK
+    settle_fallback: [MEDIAN, LIMIT, PRE_SETTLE]
+    big_side: NONE
+    cancel_limit: 500
+    large_cancel: {count: 50, min_qty: 800}
+    self_trade_limit: 5
+  CFFEX:
+    explicit_close_today: false
+    close_style: TODAY_FIRST          # 先平当日新开仓：lot consumption agrees with the close-today fee rule
+    close_today_fee_rule: SAME_DAY_OPENS_FIRST
+    settle_rounding: ROUND_TICK
+    settle_fallback: [HOURLY, FULLDAY, BENCHMARK, PRE_SETTLE]
+    big_side: GROUPS
+    big_side_exit: PHYSICAL_DELIVERY_MONTH_MINUS_1
+    cancel_limit: 400
+    large_cancel: {count: 100, min_qty: 16}
+    self_trade_limit: 5
+
+products:
+  rb:
+    exchange: SHFE
+    name: 螺纹钢
+    sector: black
+    multiplier: 10
+    tick_size: "1"
+    limit_pct: "0.05"
+    settle_method: VWAP_FULL_DAY
+    big_side_group: "SHFE:rb"
+    sessions: [night_2100_2300, day_commodity]
+    fees:
+      - {months: [1, 5, 10], effective_from: "20260101", type: rate, open: "0.0001", close_yd: "0.0001", close_today_mult: "1"}
+      - {months: other, effective_from: "20260101", type: rate, open: "0.00002", close_yd: "0.00002", close_today_mult: "1"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.07", broker_add: "0.01"}
+      - {contracts: [rb2610], effective_from: "20260901", exchange_rate: "0.10", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 500, MARKET: 30}
+  hc:
+    exchange: SHFE
+    name: 热轧卷板
+    sector: black
+    multiplier: 10
+    tick_size: "1"
+    limit_pct: "0.05"
+    big_side_group: "SHFE:hc"
+    sessions: [night_2100_2300, day_commodity]
+    fees:
+      - {months: [1, 5, 10], effective_from: "20260101", type: rate, open: "0.0001", close_yd: "0.0001", close_today_mult: "1"}
+      - {months: other, effective_from: "20260101", type: rate, open: "0.00002", close_yd: "0.00002", close_today_mult: "1"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.07", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 500, MARKET: 30}
+  cu:
+    exchange: SHFE
+    name: 铜
+    sector: nonferrous
+    multiplier: 5
+    tick_size: "10"
+    limit_pct: "0.07"
+    big_side_group: "SHFE:cu"
+    sessions: [night_2100_0100, day_commodity]
+    fees:
+      - {effective_from: "20260101", type: rate, open: "0.00005", close_yd: "0.00005", close_today_mult: "2"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.09", broker_add: "0.01"}
+      - {contracts: [cu2610, cu2611, cu2612, cu2701, cu2702], effective_from: "20260901", exchange_rate: "0.11", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 500, MARKET: 30}
+  au:
+    exchange: SHFE
+    name: 黄金
+    sector: precious
+    multiplier: 1000
+    tick_size: "0.02"
+    limit_pct: "0.14"
+    big_side_group: "SHFE:au"
+    sessions: [night_2100_0230, day_commodity]
+    fees:
+      - {months: [6, 12], effective_from: "20260101", type: per_lot, open: "20", close_yd: "20", close_today_mult: "0"}
+      - {months: other, effective_from: "20260101", type: per_lot, open: "10", close_yd: "10", close_today_mult: "0"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.16", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 500, MARKET: 30}
+  i:
+    exchange: DCE
+    name: 铁矿石
+    sector: black
+    multiplier: 100
+    tick_size: "0.5"
+    limit_pct: "0.06"
+    limit_schedule:
+      - {effective_from: "20260930", pct: "0.08"}   # DCE holiday notice: 8% from the 09-29 settlement
+    sessions: [night_2100_2300, day_commodity]
+    fees:
+      - {effective_from: "20260101", type: rate, open: "0.0001", close_yd: "0.0001", close_today_mult: "1"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.08", broker_add: "0.01"}
+      - {contracts: "*", effective_from: "20260930", exchange_rate: "0.10", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 1000, MARKET: 100}
+  j:
+    exchange: DCE
+    name: 焦炭
+    sector: black
+    multiplier: 100
+    tick_size: "0.5"
+    limit_pct: "0.08"
+    sessions: [night_2100_2300, day_commodity]
+    fees:
+      - {effective_from: "20260101", type: rate, open: "0.0001", close_yd: "0.0001", close_today_mult: "1", intraday: "0.00014"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.12", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 500, MARKET: 50}
+  m:
+    exchange: DCE
+    name: 豆粕
+    sector: agri
+    multiplier: 10
+    tick_size: "1"
+    limit_pct: "0.06"
+    limit_schedule:
+      - {effective_from: "20260930", pct: "0.08"}
+    sessions: [night_2100_2300, day_commodity]
+    fees:
+      - {effective_from: "20260101", type: per_lot, open: "1.5", close_yd: "1.5", close_today_mult: "1"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.07", broker_add: "0.01"}
+      - {contracts: "*", effective_from: "20260930", exchange_rate: "0.10", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 1000, MARKET: 100}
+  IF:
+    exchange: CFFEX
+    name: 沪深300股指
+    sector: equity_index
+    multiplier: 300
+    tick_size: "0.2"
+    limit_pct: "0.10"
+    settle_method: VWAP_LAST_HOUR
+    settle_window: "14:00-15:00"
+    big_side_group: "CFFEX:INDEX"
+    physical_delivery: false
+    sessions: [day_index]
+    fees:
+      - {effective_from: "20260101", type: rate, open: "0.000023", close_yd: "0.000023", close_today_mult: "10"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.12", broker_add: "0.0"}
+    max_order_qty: {LIMIT: 20, MARKET: 10}
+    position_limit: 5000
+    open_limit_per_day: 500
+  IH:
+    exchange: CFFEX
+    name: 上证50股指
+    sector: equity_index
+    multiplier: 300
+    tick_size: "0.2"
+    limit_pct: "0.10"
+    settle_method: VWAP_LAST_HOUR
+    settle_window: "14:00-15:00"
+    big_side_group: "CFFEX:INDEX"
+    physical_delivery: false
+    sessions: [day_index]
+    fees:
+      - {effective_from: "20260101", type: rate, open: "0.000023", close_yd: "0.000023", close_today_mult: "10"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.12", broker_add: "0.0"}
+    max_order_qty: {LIMIT: 20, MARKET: 10}
+    position_limit: 1200
+    open_limit_per_day: 500
+  IC:
+    exchange: CFFEX
+    name: 中证500股指
+    sector: equity_index
+    multiplier: 200
+    tick_size: "0.2"
+    limit_pct: "0.10"
+    settle_method: VWAP_LAST_HOUR
+    settle_window: "14:00-15:00"
+    big_side_group: "CFFEX:INDEX"
+    physical_delivery: false
+    sessions: [day_index]
+    fees:
+      - {effective_from: "20260101", type: rate, open: "0.000023", close_yd: "0.000023", close_today_mult: "10"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.12", broker_add: "0.0"}
+    max_order_qty: {LIMIT: 20, MARKET: 10}
+    position_limit: 1200
+    open_limit_per_day: 500
+  IM:
+    exchange: CFFEX
+    name: 中证1000股指
+    sector: equity_index
+    multiplier: 200
+    tick_size: "0.2"
+    limit_pct: "0.10"
+    settle_method: VWAP_LAST_HOUR
+    settle_window: "14:00-15:00"
+    big_side_group: "CFFEX:INDEX"
+    physical_delivery: false
+    sessions: [day_index]
+    fees:
+      - {effective_from: "20260101", type: rate, open: "0.000023", close_yd: "0.000023", close_today_mult: "10"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.12", broker_add: "0.0"}
+    max_order_qty: {LIMIT: 20, MARKET: 10}
+    position_limit: 1200
+    open_limit_per_day: 500
+  T:
+    exchange: CFFEX
+    name: 10年期国债
+    sector: rates
+    multiplier: 10000
+    tick_size: "0.005"
+    limit_pct: "0.02"
+    settle_method: VWAP_LAST_HOUR
+    settle_window: "14:15-15:15"
+    big_side_group: "CFFEX:TREASURY"
+    physical_delivery: true
+    sessions: [day_treasury]
+    fees:
+      - {effective_from: "20260101", type: per_lot, open: "3", close_yd: "3", close_today_mult: "0"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.02", broker_add: "0.0"}
+    max_order_qty: {LIMIT: 50, MARKET: 30}
+    position_limit: 4000
+
+instruments:
+  - {instrument_id: rb2610, product: rb, last_trade_day: "20261015", delivery_month: "202610"}
+  - {instrument_id: rb2701, product: rb, last_trade_day: "20270115", delivery_month: "202701"}
+  - {instrument_id: rb2705, product: rb, last_trade_day: "20270517", delivery_month: "202705"}
+  - {instrument_id: hc2701, product: hc, last_trade_day: "20270115", delivery_month: "202701"}
+  - {instrument_id: cu2611, product: cu, last_trade_day: "20261116", delivery_month: "202611"}
+  - {instrument_id: au2612, product: au, last_trade_day: "20261215", delivery_month: "202612"}
+  - {instrument_id: i2701, product: i, last_trade_day: "20270115", delivery_month: "202701"}
+  - {instrument_id: j2701, product: j, last_trade_day: "20270115", delivery_month: "202701"}
+  - {instrument_id: m2701, product: m, last_trade_day: "20270115", delivery_month: "202701"}
+  - {instrument_id: IF2612, product: IF, last_trade_day: "20261218", delivery_month: "202612"}
+  - {instrument_id: IH2612, product: IH, last_trade_day: "20261218", delivery_month: "202612"}
+  - {instrument_id: IC2612, product: IC, last_trade_day: "20261218", delivery_month: "202612"}
+  - {instrument_id: T2612, product: T, last_trade_day: "20261211", delivery_month: "202612"}

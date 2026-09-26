@@ -1,0 +1,75 @@
+# Acceptance scenario QS-03 (01 §6.3, 02 §9.5 POST /control/scenario {"name": "breaker"}).
+#
+# Intent: ACC3 (日内逆势加仓, initial capital 10,000,000, trades rb/hc/i long against the
+# trend) must cross the three daily-loss levels of risk_rules.yaml one after another, one per leg:
+#   leg 1: -2.0% of initial capital (-200,000)  -> warn (ALERT)
+#   leg 2: -2.5%                   (-250,000)  -> restrict (RESTRICT: order size x0.5, no adding to losers)
+#   leg 3: -3.0%                   (-300,000)  -> halt (CIRCUIT_BREAK: latched, opening orders rejected)
+# Before the daily-loss warn, ACC3's ladder adds lift its black-sector and rb exposure over the
+# 0.8 sector / 0.7 product_exposure WARN lines: the position dimension of the demo comes first.
+# After the halt the bot keeps sending 1-lot opening probes (rejected REJECT_ACCOUNT_HALTED every
+# ~20 s) and trims 10% of its book once (closing orders, they trade).
+#
+# The loss a price move produces depends on the book the strategy bots hold, so the scenario
+# is written as black-sector price moves with timing, and every size is a variable that can be
+# overridden per run, e.g.
+#   POST /control/scenario {"name": "breaker", "vars": {"leg1_pct": -0.026, "ramp_s": 30}}
+#
+# Calibration (2026-09-25) against the real risk engine: futrisk.sim.bots.calibration runs
+# EngineCore (risk_rules.yaml, fees, P&L) in-process with the real ACC3 bot in scenario mode
+# (FUTRISK_BOTS_MODE=scenario: 0.78x-equity book rb 39% / hc 17% / i 22%; ladder +6.25% of the
+# base per 0.5% down to -4%) on the sim's price model (GBM + jumps, vol from sim.yaml, sector
+# correlation 0.6, 500 ms steps, LINEAR legs); the scenario starts once the book is >= 0.7x
+# equity, like `futrisk demo --scenario breaker`.
+#   noise-free path: warn 27 s, restrict 78 s, halt 132 s; daily P&L at the leg ends
+#                    -2.21% / -2.69% / -3.50%; worst -3.51%
+#   seeds 1-60:      one level per leg (>= 30 s apart, halt before the last step) 60/60
+#   seeds 61-160:    98/100 (one run: a price jump pulled all levels into legs 1-2; one: restrict at
+#                    123.5 s); worst daily P&L -4.28% over 420 s after the last step (derisk at -5%)
+# The legs are fast (30 s ramps, 30 s holds) on purpose: the market noise of the black book
+# grows like sqrt(time) (about 0.1% of equity after two minutes) while restrict and halt are only
+# 0.5% apart - at 120 s leg spacing (60 s ramps) at best ~85% of the runs see one level per leg:
+# the halt comes already in the leg-2 hold, or not in leg 3 (legs -2.4%/-0.6%/-0.6%: 84/100 seeds;
+# the previous -2.7%/-0.6%/-0.7% with this ladder: 6/20).
+# Rule of thumb for another book: daily P&L ≈ -N × M / 10,000,000 (N = ACC3's long black notional
+# incl. ladder adds, M = cumulative sector move); scale every leg by 7.8M / N. Re-run
+#   python -m futrisk.sim.bots.calibration --seeds 20
+# after changing ACC3's sizing, the ladder or the daily-loss thresholds
+# (tests/unit/bots/test_bots_calibration.py runs it as a slow test).
+# Keep the cumulative move inside the daily limits (rb/hc ±5%, i ±6%, j ±8%): a limit-locked
+# market has no bids, so ACC3's closing orders could not trade. Ramps are LINEAR so md-gateway
+# sees a fast sell-off rather than a single spike (which it would quarantine).
+name: breaker
+description: >-
+  QS-03 circuit-breaker demo: the black sector (rb/hc/i/j) sells off in three LINEAR legs a
+  minute apart (default -2.5%, -0.48%, -0.88%; 30 s ramps, 30 s holds) so that ACC3's long book
+  (0.78x equity plus ladder adds) crosses the -2% warn, -2.5% restrict and -3% halt daily-loss
+  levels one per leg. Variables: sector, leg1_pct, leg2_pct, leg3_pct, ramp_s.
+vars:
+  sector: black
+  leg1_pct: -0.025
+  leg2_pct: -0.0048
+  leg3_pct: -0.0088
+  ramp_s: 30
+steps:
+  - at_s: 0
+    action: log
+    note: "breaker: leg 1 of 3 (${leg1_pct} over ${ramp_s}s) - ACC3's exposure warns, then the -2% daily-loss warn"
+  - at_s: 0
+    action: shock
+    params: {sector: "${sector}", pct: "${leg1_pct}", duration_s: "${ramp_s}", shape: LINEAR}
+  - at_s: 60
+    action: log
+    note: "breaker: leg 2 of 3 (${leg2_pct}) - the -2.5% restrict level is expected (adds rejected REJECT_ADD_TO_LOSER)"
+  - at_s: 60
+    action: shock
+    params: {sector: "${sector}", pct: "${leg2_pct}", duration_s: "${ramp_s}", shape: LINEAR}
+  - at_s: 120
+    action: log
+    note: "breaker: leg 3 of 3 (${leg3_pct}) - the -3% halt (circuit break) is expected"
+  - at_s: 120
+    action: shock
+    params: {sector: "${sector}", pct: "${leg3_pct}", duration_s: "${ramp_s}", shape: LINEAR}
+  - at_s: 180
+    action: log
+    note: "breaker: all legs applied; ACC3 should be HALTED (latched): opening probes rejected (REJECT_ACCOUNT_HALTED), its halt trim (closing orders) trades"

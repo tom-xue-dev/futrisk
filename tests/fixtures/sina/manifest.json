@@ -1,0 +1,42 @@
+{
+  "captured_at": "2026-09-25T10:46:56+08:00",
+  "note": "Raw response bodies from https://hq.sinajs.cn/list=<codes> (gzip-decoded, GB18030 bytes, unmodified). Captured on 2026-09-25 (Mid-Autumn holiday): quotes are the 2026-09-24 closing snapshots.",
+  "files": {
+    "commodity.txt": {
+      "url": "https://hq.sinajs.cn/list=nf_RB2701,nf_RB2705,nf_HC2701,nf_CU2611,nf_AU2612,nf_I2701,nf_J2701,nf_M2701",
+      "status": 200,
+      "content_type": "application/javascript; charset=GB18030",
+      "bytes": 1986
+    },
+    "cffex.txt": {
+      "url": "https://hq.sinajs.cn/list=CFF_RE_IF2612,CFF_RE_IC2612,CFF_RE_T2612,CFF_RE_TS2612",
+      "status": 200,
+      "content_type": "application/javascript; charset=GB18030",
+      "bytes": 1236
+    },
+    "all_configured.txt": {
+      "url": "https://hq.sinajs.cn/list=nf_RB2701,nf_RB2705,nf_HC2701,nf_CU2611,nf_AU2612,nf_I2701,nf_J2701,nf_M2701,CFF_RE_IF2612,CFF_RE_IC2612,CFF_RE_T2612",
+      "status": 200,
+      "content_type": "application/javascript; charset=GB18030",
+      "bytes": 2922
+    },
+    "invalid.txt": {
+      "url": "https://hq.sinajs.cn/list=nf_XX9999,nf_RB2509,nf_rb2701,CFF_RE_if2612,CFF_RE_IF2609,nf_RB0",
+      "status": 200,
+      "content_type": "application/javascript; charset=GB18030",
+      "bytes": 671
+    },
+    "empty_list.txt": {
+      "url": "https://hq.sinajs.cn/list=",
+      "status": 200,
+      "content_type": "application/javascript; charset=GB18030",
+      "bytes": 0
+    },
+    "forbidden_no_referer.txt": {
+      "url": "https://hq.sinajs.cn/list=nf_RB2701 (no Referer header)",
+      "status": 403,
+      "content_type": null,
+      "bytes": 9
+    }
+  }
+}

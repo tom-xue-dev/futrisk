@@ -1,0 +1,129 @@
+# Declarative risk rules (01 §8.9, default thresholds and rationale in 01 §8.14).
+# metric names: account.<AccountMetricsView|AccountFunds field>,
+#               product.<ExposureView field> (scope account/product),
+#               sector.<field> (scope account/sector).
+rules:
+  - id: daily_loss
+    metric: account.daily_pnl_pct_init   # floating_only: account.floating_pnl_pct_init
+    op: "<="
+    scope: account
+    hysteresis: 0.2
+    cooldown_s: 60
+    pretrade: true
+    levels:
+      - {name: warn, threshold: -0.020, action: ALERT}
+      - {name: restrict, threshold: -0.025, action: RESTRICT, params: {max_order_factor: 0.5, no_add_to_losers: true}}
+      - {name: halt, threshold: -0.030, action: CIRCUIT_BREAK, latch: true, confirm: {states: 2, ms: 1000}, rearm: {extra: 0.01}}
+      - {name: derisk, threshold: -0.050, action: LIQUIDATE, params: {step: 0.5}}
+    overrides: {}
+
+  - id: intraday_dd
+    metric: account.intraday_dd
+    op: ">="
+    levels:
+      - {name: warn, threshold: 0.025, action: ALERT}
+      - {name: block, threshold: 0.04, action: RESTRICT, params: {block_open: true}}
+
+  - id: hwm_dd
+    metric: account.hwm_dd
+    op: ">="
+    levels:
+      - {name: warn, threshold: 0.08, action: ALERT}
+      - {name: halve, threshold: 0.12, action: RESTRICT, params: {exposure_cap_factor: 0.5}}
+      - {name: block, threshold: 0.15, action: RESTRICT, params: {block_open: true}}
+
+  - id: nav_floor
+    metric: account.nav
+    op: "<="
+    # NAV is a level around 1.0, not a quantity measured from zero: the default relative
+    # hysteresis (0.2) would put the clear lines at 1.08 / 1.02. 0.02 gives 0.918 / 0.867.
+    hysteresis: 0.02
+    levels:
+      - {name: warn, threshold: 0.90, action: ALERT}
+      - {name: derisk, threshold: 0.85, action: LIQUIDATE, params: {step: 0.5}}
+
+  - id: risk_degree
+    metric: account.risk_degree
+    op: ">="
+    pretrade: true
+    levels:
+      - {name: warn, threshold: 0.35, action: ALERT}
+      - {name: block, threshold: 0.50, action: RESTRICT, params: {block_open: true}}
+      - {name: derisk, threshold: 0.70, action: LIQUIDATE, params: {step: 0.3}}
+
+  - id: product_exposure
+    metric: product.utilization          # net_pct_equity / (0.03 / limit_pct)
+    op: ">="
+    scope: account/product
+    pretrade: true
+    levels:
+      - {name: warn, threshold: 0.7, action: ALERT}
+      - {name: block, threshold: 1.0, action: RESTRICT, params: {block_open: true}}
+
+  - id: concentration
+    metric: account.effective_n
+    op: "<"
+    hysteresis: 0.1       # clear lines 5.5 / 3.3 (default levels)
+    # a small book is not a concentration risk: evaluate only from 50% gross notional / equity;
+    # time-only confirmation (states: 0) so that a multi-product build, whose first fills make
+    # N = 1 for a few seconds, does not raise or restrict anything
+    min_gross_pct: 0.5
+    levels:
+      - {name: warn, threshold: 5, action: ALERT, confirm: {states: 0, ms: 30000}}
+      - {name: restrict, threshold: 3, action: RESTRICT, params: {block_open_largest_product: true},
+         confirm: {states: 0, ms: 30000}}
+    # Mandate-based overrides: the firm-wide N>=5 applies to diversified CTA books. ACC3 trades
+    # three black-sector products by mandate, ACC4 two index futures, ACC5 one rb calendar
+    # spread (N=1 by construction), so their floors follow the mandate instead of flagging it
+    # all day. Other risk (sector, product exposure, daily loss) still binds these accounts.
+    # ACC3's book moves between N ~2.3 (rb ladder full) and ~2.65 (base book): warn below 2.0
+    # (clear 2.2), i.e. only when the book has really collapsed into about two products.
+    overrides:
+      ACC3: {warn: {threshold: 2.0}, restrict: {threshold: 1.5}}
+      ACC4: {warn: {threshold: 1.5}, restrict: {threshold: 1.0}}
+      ACC5: {warn: {threshold: 1.0}, restrict: {threshold: 1.0}}
+
+  - id: sector_exposure
+    metric: sector.net_pct_equity
+    op: ">="
+    scope: account/sector
+    levels:
+      - {name: warn, threshold: 0.8, action: ALERT}
+      - {name: block, threshold: 1.2, action: RESTRICT, params: {block_open: true}}
+
+  - id: leverage
+    metric: account.leverage
+    op: ">="
+    pretrade: true
+    levels:
+      - {name: warn, threshold: 3.0, action: ALERT}
+      - {name: block, threshold: 4.0, action: RESTRICT, params: {block_open: true}}
+
+  - id: limit_stress
+    metric: account.limit_stress
+    op: ">="
+    levels:
+      - {name: warn, threshold: 0.10, action: ALERT}
+      - {name: block, threshold: 0.15, action: RESTRICT, params: {block_open: true}}
+
+  - id: compliance
+    metric: account.compliance_util      # max(open volume, cancels, self trades) / exchange limit
+    op: ">="
+    levels:
+      - {name: warn, threshold: 0.8, action: ALERT}
+
+pretrade:
+  fat_finger_ticks: 50
+  fat_finger_pct: 0.03
+  funds_buffer: 0.05
+  throttle_rate_per_s: 20
+  throttle_burst: 40
+  route_ttl_ms: 2000
+  default_max_order_qty: 1000
+
+system:
+  snapshot_hz: 2.0
+  metric_sample_s: 1.0
+  md_unknown_account_block_pct: 0.5
+  recon_interval_s: 300
+  recon_quiet_s: 5

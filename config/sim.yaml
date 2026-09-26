@@ -1,0 +1,24 @@
+# Virtual exchange (sim-exchange): price engine, Feed A/B, SimBroker, control API.
+price_engine:
+  seed: 20260928
+  tick_interval_ms: 500
+  sector_correlation: 0.6
+  market_correlation: 0.2
+  instruments:
+    rb2610: {pre_settle: "3090", vol_annual: 0.22, volume_per_s: 5, open_interest: 200000}  # near month (10% margin, big-side exclusion)
+    rb2701: {pre_settle: "3120", vol_annual: 0.22, volume_per_s: 40, open_interest: 1800000}
+    rb2705: {pre_settle: "3150", vol_annual: 0.21, volume_per_s: 12, open_interest: 600000}
+    hc2701: {pre_settle: "3260", vol_annual: 0.22, volume_per_s: 15, open_interest: 900000}
+    cu2611: {pre_settle: "78000", vol_annual: 0.18, volume_per_s: 6, open_interest: 180000}
+    au2612: {pre_settle: "850.00", vol_annual: 0.16, volume_per_s: 8, open_interest: 300000}
+    i2701: {pre_settle: "780.0", vol_annual: 0.28, volume_per_s: 20, open_interest: 700000}
+    j2701: {pre_settle: "1650.0", vol_annual: 0.30, volume_per_s: 4, open_interest: 60000}
+    m2701: {pre_settle: "3000", vol_annual: 0.18, volume_per_s: 25, open_interest: 1500000}
+    IF2612: {pre_settle: "4414.8", vol_annual: 0.20, volume_per_s: 3, open_interest: 90000}
+    IH2612: {pre_settle: "2950.0", vol_annual: 0.18, volume_per_s: 2, open_interest: 40000}
+    IC2612: {pre_settle: "6500.0", vol_annual: 0.24, volume_per_s: 2, open_interest: 80000}
+    T2612: {pre_settle: "108.000", vol_annual: 0.03, volume_per_s: 2, open_interest: 150000}
+feed_a: {host: "127.0.0.1", port: 7001, ring_size: 100000, heartbeat_ms: 1000}
+feed_b: {host: "127.0.0.1", port: 7002}
+broker: {endpoint: "tcp://127.0.0.1:7003", front_id: 1, ack_delay_ms: 5, fill_delay_ms: 20}
+control: {host: "127.0.0.1", port: 7004}

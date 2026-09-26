@@ -1,0 +1,27 @@
+# Endpoints and supervision (02 §3). The demo profile binds everything to 127.0.0.1.
+profile: demo
+bus:
+  heartbeat_ms: 1000
+  peer_timeout_missed: 3
+  hang_threshold_ms: 30000
+  pub_hwm: 10000
+  md_pub_hwm: 100000
+  router_hwm: 1000
+  replay_window_days: 7
+  # service processes' garbage collector (01 §11 RK-01): young-collection thresholds at start, and
+  # gc.collect() + gc.freeze() once when the service reports RUNNING (start-up objects are never scanned again)
+  gc: {enabled: true, threshold: [10000, 20, 100], freeze_on_running: true}
+instances:
+  md-gateway:      {pub: "tcp://127.0.0.1:7101", router: "tcp://127.0.0.1:7102"}
+  trade-gateway:   {pub: "tcp://127.0.0.1:7201", router: "tcp://127.0.0.1:7202"}
+  risk-engine-0:   {pub: "tcp://127.0.0.1:7301", router: "tcp://127.0.0.1:7302", shard: 0, coordinator: true}
+  risk-engine-1:   {pub: "tcp://127.0.0.1:7311", router: "tcp://127.0.0.1:7312", shard: 1}
+  clearing-worker: {pub: "tcp://127.0.0.1:7401", router: "tcp://127.0.0.1:7402"}
+  api-gateway:     {pub: "tcp://127.0.0.1:7501", router: "tcp://127.0.0.1:7502", http: "http://127.0.0.1:8000"}
+  supervisor:      {pub: "tcp://127.0.0.1:7601", router: "tcp://127.0.0.1:7602"}
+supervisor:
+  startup_order: [sim-exchange, md-gateway, trade-gateway, clearing-worker, risk-engine-0, risk-engine-1, api-gateway, strategy-sim]
+  external: [sim-exchange, strategy-sim]
+  restart: {backoff_initial_ms: 1000, backoff_max_ms: 30000, stable_reset_s: 60}
+  liveness_timeout_s: 20
+  shutdown_grace_s: 10

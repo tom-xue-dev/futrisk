@@ -1,0 +1,40 @@
+# Market-data fault scenario QS-05 (01 §6.4 R4, §10.2; 02 §9.1, §9.5).
+#
+# Intent: Feed A (the CTP-style push feed) is cut for 20 s while Feed B keeps polling.
+# md-gateway must fail over to Feed B at once, reconnect with
+# resume {epoch, from_seq = last contiguous seq + 1}, replay the gap as BACKFILL (never
+# sent to risk-engine) and report GAP_FILLED with 0 duplicates. Then smaller Feed A faults
+# follow - a seq gap it must repair in-connection, duplicates and reordering it must
+# absorb - so that no duplicate or wrong risk signal appears (task.md 行情接入 3).
+# Override the outage length per run: {"name": "feed_outage", "vars": {"outage_s": 30}}.
+name: feed_outage
+description: >-
+  QS-05 feed failover demo: Feed A is disconnected for 20 s (reconnects refused) while Feed B
+  keeps polling, then reconnects and replays the gap; followed by a 15-tick seq gap,
+  20% duplicated ticks and reordering on Feed A. Variables: outage_s, gap_ticks.
+vars:
+  outage_s: 20
+  gap_ticks: 15
+steps:
+  - at_s: 0
+    action: log
+    note: "feed_outage: Feed A down for ${outage_s}s, Feed B stays up"
+  - at_s: 0
+    action: fault
+    ref: feed_a_down
+    params: {type: FEED_DISCONNECT, target: feed_a, params: {refuse_reconnect_s: "${outage_s}"}}
+  - at_s: 45
+    action: log
+    note: "feed_outage: Feed A drops ${gap_ticks} ticks (recoverable with the replay op)"
+  - at_s: 45
+    action: fault
+    params: {type: FEED_GAP, target: feed_a, params: {drop_count: "${gap_ticks}"}}
+  - at_s: 60
+    action: fault
+    params: {type: FEED_DUPLICATE, target: feed_a, params: {ratio: 0.2}, duration_s: 15}
+  - at_s: 90
+    action: fault
+    params: {type: FEED_REORDER, target: feed_a, params: {window: 8}, duration_s: 15}
+  - at_s: 120
+    action: log
+    note: "feed_outage: done - md-gateway should report the gaps FILLED and no duplicate risk events"

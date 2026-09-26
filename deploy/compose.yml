@@ -1,0 +1,237 @@
+# futrisk on docker compose (01 §7.2 D2): one image, one container per service, the container
+# command is `futrisk svc <name>`; compose restart policies take the supervisor's process
+# management, the supervisor itself runs in clock-only mode and owns the market clock.
+#
+#   docker compose -f deploy/compose.yml up -d --build     # build the image and start everything
+#   docker compose -f deploy/compose.yml ps                 # containers (health)
+#   docker compose -f deploy/compose.yml logs -f risk-engine-0
+#   docker compose -f deploy/compose.yml down               # stop (add -v to drop all data)
+#   dashboard: http://127.0.0.1:8000   (another host port: FUTRISK_HTTP_PORT=18000 docker compose ...)
+#
+# CLI inside the api-gateway container (its home holds the ADMIN key; every container shares
+# FUTRISK_HOME_ID, so the CLI accepts the supervisor and the gateway as this deployment's):
+#   docker compose -f deploy/compose.yml exec api-gateway futrisk status
+#   docker compose -f deploy/compose.yml exec api-gateway futrisk ps
+#   docker compose -f deploy/compose.yml exec api-gateway futrisk accounts
+#   docker compose -f deploy/compose.yml exec api-gateway futrisk positions
+#   docker compose -f deploy/compose.yml exec api-gateway futrisk clock show
+#   docker compose -f deploy/compose.yml exec api-gateway futrisk clock jump --to 09:30
+#       (also --to next-open | pre-close | "2026-09-28 13:30"; REST: POST /api/v1/demo/clock
+#        {"target": "AT", "at": "2026-09-28T09:30:00+08:00"} or {"target": "NEXT_OPEN"}, ADMIN key)
+#   ADMIN key: docker compose -f deploy/compose.yml exec api-gateway cat /var/lib/futrisk/secrets/bootstrap_admin.key
+#
+# Market clock (app.mode=demo): the supervisor's first start puts the market at app.demo.start_at
+# (default: the next trading day's 08:58, two minutes before the 09:00 open); `seed` seeds the
+# first-day books meanwhile and the bots trade from the open on. The clock state is kept in the
+# supervisor's volume and runs on with the wall clock, so after a later `up` the market may be
+# closed: jump to the next session with `futrisk clock jump --to next-open`.
+# svc.start/stop/restart/kill answer PRECONDITION_FAILED here (clock-only mode manages no
+# processes): restart a service with `docker compose -f deploy/compose.yml restart <service>`.
+#
+# Networking: the services talk ZeroMQ over the `bus` network using the endpoints of
+# deploy/config/services.yaml (compose service names). Only api-gateway's HTTP port is
+# published, on the host's loopback.
+#
+# Volumes: each service keeps <home> (/var/lib/futrisk: its database, logs, backups) in its own
+# volume. Shared, where the code needs it:
+#   config     <home>/config of every service: config versions + active.json. api-gateway (the
+#              config 2PC coordinator) writes new versions there and every participant loads
+#              config/versions/<N> from its own home; config-init creates version 1.
+#   reports    written by clearing-worker, served by api-gateway (read-only there)
+#   backtests  written by clearing-worker, served by api-gateway (read-only there)
+#   ticks      recorded by md-gateway, read by clearing-worker backtests of layer C (read-only)
+#
+# One-shot helpers: config-init (creates config version 1 on the shared volume before anything
+# else starts) and seed (seeds the first-day books once api-gateway is healthy).
+
+name: futrisk
+
+x-futrisk-env: &futrisk-env
+  # one home identity for the whole deployment: every container has its own home volume, and the
+  # CLI / supervisor refuse processes that report another home's id
+  FUTRISK_HOME_ID: "${FUTRISK_HOME_ID:-futrisk-compose}"
+
+x-futrisk: &futrisk
+  image: futrisk:${FUTRISK_VERSION:-0.1.0}
+  pull_policy: never  # built locally (config-init's build section), never on a registry
+  init: true  # tini as PID 1: forwards SIGTERM (graceful stop) and reaps process-pool children
+  restart: unless-stopped
+  stop_grace_period: 30s
+  environment: *futrisk-env
+  networks: [bus]
+
+services:
+  config-init:
+    <<: *futrisk
+    build:  # the one image of every service
+      context: ..
+      dockerfile: deploy/Dockerfile
+    pull_policy: missing  # build it when it does not exist yet
+    restart: "no"
+    entrypoint: ["python", "/opt/futrisk-deploy/init_config.py"]
+    volumes:
+      - config:/var/lib/futrisk/config
+      - ./init_config.py:/opt/futrisk-deploy/init_config.py:ro
+      - ./config/services.yaml:/opt/futrisk-deploy/services.yaml:ro
+
+  # market clock owner (sys.clock, svc.clock); manages no process (docker does)
+  supervisor:
+    <<: *futrisk
+    command: ["up", "--clock-only"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+    volumes:
+      - supervisor:/var/lib/futrisk  # supervisor.db: the demo clock state survives restarts
+      - config:/var/lib/futrisk/config:ro
+    healthcheck:
+      # `futrisk ps --json`: the supervisor answers svc.ps with this deployment's home id. Up to three
+      # tries per check: on Docker Desktop a new ZMQ connection sometimes waits ~1 s for its first
+      # SYN (retransmit), longer than the CLI's 300 ms connect grace (bus/rpc_client.py)
+      test: ["CMD-SHELL", "futrisk ps --json >/dev/null 2>&1 || futrisk ps --json >/dev/null 2>&1 || futrisk ps --json"]
+      interval: 10s
+      timeout: 15s
+      start_period: 20s
+      start_interval: 2s
+
+  # adopts the supervisor's clock at start (waits up to 60 s, else exits 1 and is restarted)
+  sim-exchange:
+    <<: *futrisk
+    command: ["svc", "sim-exchange"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+    volumes:
+      - sim-exchange:/var/lib/futrisk
+      - config:/var/lib/futrisk/config:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://sim-exchange:7002/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+
+  md-gateway:
+    <<: *futrisk
+    command: ["svc", "md-gateway"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+      sim-exchange: {condition: service_started}
+    volumes:
+      - md-gateway:/var/lib/futrisk
+      - config:/var/lib/futrisk/config:ro
+      - ticks:/var/lib/futrisk/ticks
+
+  trade-gateway:
+    <<: *futrisk
+    command: ["svc", "trade-gateway"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+      md-gateway: {condition: service_started}
+    volumes:
+      - trade-gateway:/var/lib/futrisk
+      - config:/var/lib/futrisk/config:ro
+
+  clearing-worker:
+    <<: *futrisk
+    command: ["svc", "clearing-worker"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+      trade-gateway: {condition: service_started}
+    volumes:
+      - clearing-worker:/var/lib/futrisk
+      - config:/var/lib/futrisk/config:ro
+      - reports:/var/lib/futrisk/reports
+      - backtests:/var/lib/futrisk/backtests
+      - ticks:/var/lib/futrisk/ticks:ro
+
+  risk-engine-0:
+    <<: *futrisk
+    command: ["svc", "risk-engine", "--shard", "0"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+      clearing-worker: {condition: service_started}
+    volumes:
+      - risk-engine-0:/var/lib/futrisk
+      - config:/var/lib/futrisk/config:ro
+
+  risk-engine-1:
+    <<: *futrisk
+    command: ["svc", "risk-engine", "--shard", "1"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+      clearing-worker: {condition: service_started}
+    volumes:
+      - risk-engine-1:/var/lib/futrisk
+      - config:/var/lib/futrisk/config:ro
+
+  api-gateway:
+    <<: *futrisk
+    command: ["svc", "api-gateway"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+      risk-engine-0: {condition: service_started}
+      risk-engine-1: {condition: service_started}
+    ports:
+      - "127.0.0.1:${FUTRISK_HTTP_PORT:-8000}:8000"  # host loopback only
+    volumes:
+      - api-gateway:/var/lib/futrisk
+      - config:/var/lib/futrisk/config
+      - reports:/var/lib/futrisk/reports:ro
+      - backtests:/var/lib/futrisk/backtests:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+
+  strategy-sim:
+    <<: *futrisk
+    command: ["svc", "strategy-sim"]
+    depends_on:
+      config-init: {condition: service_completed_successfully}
+      supervisor: {condition: service_healthy}
+      api-gateway: {condition: service_started}
+    volumes:
+      - strategy-sim:/var/lib/futrisk
+      - config:/var/lib/futrisk/config:ro
+
+  # one-shot: seeds the first-day books like `futrisk demo` (skipped when books exist), for the
+  # trading day of the market clock; reads the bootstrap ADMIN key from api-gateway's home (ro)
+  seed:
+    <<: *futrisk
+    restart: "no"
+    entrypoint: ["python", "/opt/futrisk-deploy/seed_books.py"]
+    depends_on:
+      supervisor: {condition: service_healthy}
+      api-gateway: {condition: service_healthy}
+    environment:
+      <<: *futrisk-env
+      FUTRISK_API: http://api-gateway:8000
+      FUTRISK_API_KEY_FILE: /var/lib/futrisk-api/secrets/bootstrap_admin.key
+    volumes:
+      - config:/var/lib/futrisk/config:ro
+      - api-gateway:/var/lib/futrisk-api:ro
+      - ./seed_books.py:/opt/futrisk-deploy/seed_books.py:ro
+
+networks:
+  bus: {}
+
+volumes:
+  config: {}
+  reports: {}
+  backtests: {}
+  ticks: {}
+  supervisor: {}
+  sim-exchange: {}
+  md-gateway: {}
+  trade-gateway: {}
+  clearing-worker: {}
+  risk-engine-0: {}
+  risk-engine-1: {}
+  api-gateway: {}
+  strategy-sim: {}

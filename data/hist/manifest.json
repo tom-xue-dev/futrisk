@@ -1,0 +1,2477 @@
+{
+ "generated_at": "2026-09-25T14:29:21+09:00",
+ "run_started_at": "2026-09-25T14:29:20+09:00",
+ "script": "scripts/fetch_hist.py",
+ "args": {
+  "products": "rb,hc,cu,au,i,j,m,IF,IH,IC,IM,T",
+  "layers": "daily,minute,official",
+  "start": "20150101",
+  "end": null,
+  "periods": "5,15,60",
+  "official_days": 5,
+  "sleep": 1.0,
+  "retries": 4,
+  "force": false,
+  "update": false,
+  "verify_only": false,
+  "out": "data/hist"
+ },
+ "versions": {
+  "akshare": "1.18.97",
+  "pandas": "3.0.6",
+  "pyarrow": "25.0.1",
+  "python": "3.12.10"
+ },
+ "requests_made": 0,
+ "failures": [],
+ "runs": [
+  {
+   "started_at": "2026-09-25T14:24:51+09:00",
+   "finished_at": "2026-09-25T14:28:06+09:00",
+   "args": {
+    "products": "rb,hc,cu,au,i,j,m,IF,IH,IC,IM,T",
+    "layers": "daily,minute,official",
+    "start": "20150101",
+    "end": null,
+    "periods": "5,15,60",
+    "official_days": 5,
+    "sleep": 1.0,
+    "retries": 4,
+    "force": false,
+    "update": true,
+    "verify_only": false,
+    "out": "data/hist"
+   },
+   "requests": 74,
+   "failures": [
+    {
+     "layer": "official",
+     "product": "DCE",
+     "what": "20260918",
+     "error": "FetchError: get_dce_daily(20260918): JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+     "at": "2026-09-25T14:28:05+09:00"
+    }
+   ]
+  },
+  {
+   "started_at": "2026-09-25T14:28:39+09:00",
+   "finished_at": "2026-09-25T14:28:39+09:00",
+   "args": {
+    "products": "rb,hc,cu,au,i,j,m,IF,IH,IC,IM,T",
+    "layers": "daily,minute,official",
+    "start": "20150101",
+    "end": null,
+    "periods": "5,15,60",
+    "official_days": 5,
+    "sleep": 1.0,
+    "retries": 4,
+    "force": false,
+    "update": false,
+    "verify_only": false,
+    "out": "data/hist"
+   },
+   "requests": 0,
+   "failures": []
+  },
+  {
+   "started_at": "2026-09-25T14:28:58+09:00",
+   "finished_at": "2026-09-25T14:28:59+09:00",
+   "args": {
+    "products": "rb,hc,cu,au,i,j,m,IF,IH,IC,IM,T",
+    "layers": "daily,minute,official",
+    "start": "20150101",
+    "end": null,
+    "periods": "5,15,60",
+    "official_days": 5,
+    "sleep": 1.0,
+    "retries": 4,
+    "force": false,
+    "update": false,
+    "verify_only": true,
+    "out": "data/hist"
+   },
+   "requests": 0,
+   "failures": []
+  },
+  {
+   "started_at": "2026-09-25T14:29:20+09:00",
+   "finished_at": "2026-09-25T14:29:21+09:00",
+   "args": {
+    "products": "rb,hc,cu,au,i,j,m,IF,IH,IC,IM,T",
+    "layers": "daily,minute,official",
+    "start": "20150101",
+    "end": null,
+    "periods": "5,15,60",
+    "official_days": 5,
+    "sleep": 1.0,
+    "retries": 4,
+    "force": false,
+    "update": false,
+    "verify_only": false,
+    "out": "data/hist"
+   },
+   "requests": 0,
+   "failures": []
+  }
+ ],
+ "fetch_stats": {
+  "IF": {
+   "sina_phantom_rows_dropped": [],
+   "source": "cffex",
+   "main_selection": {
+    "days": 2852,
+    "rolls": 86,
+    "monotonic_overrides": 298,
+    "sina_rows": 2353,
+    "sina_match": {
+     "strict": 2343,
+     "relaxed": 4,
+     "near": 5,
+     "enclosed": 1,
+     "ambiguous": 0,
+     "unmatched": 0
+    },
+    "sina_main_agree_days": 1534,
+    "sina_main_compared_days": 2353,
+    "sina_settle_equal": 25,
+    "sina_settle_compared": 25,
+    "rolls_since_start": 86
+   }
+  },
+  "IH": {
+   "sina_phantom_rows_dropped": [],
+   "source": "cffex",
+   "main_selection": {
+    "days": 2785,
+    "rolls": 85,
+    "monotonic_overrides": 354,
+    "sina_rows": 2353,
+    "sina_match": {
+     "strict": 2343,
+     "relaxed": 3,
+     "near": 5,
+     "enclosed": 2,
+     "ambiguous": 0,
+     "unmatched": 0
+    },
+    "sina_main_agree_days": 1597,
+    "sina_main_compared_days": 2353,
+    "sina_settle_equal": 31,
+    "sina_settle_compared": 31,
+    "rolls_since_start": 85
+   }
+  },
+  "IC": {
+   "sina_phantom_rows_dropped": [],
+   "source": "cffex",
+   "main_selection": {
+    "days": 2785,
+    "rolls": 76,
+    "monotonic_overrides": 241,
+    "sina_rows": 2353,
+    "sina_match": {
+     "strict": 2341,
+     "relaxed": 3,
+     "near": 8,
+     "enclosed": 1,
+     "ambiguous": 0,
+     "unmatched": 0
+    },
+    "sina_main_agree_days": 1367,
+    "sina_main_compared_days": 2353,
+    "sina_settle_equal": 4,
+    "sina_settle_compared": 4,
+    "rolls_since_start": 76
+   }
+  },
+  "IM": {
+   "sina_phantom_rows_dropped": [],
+   "source": "cffex",
+   "main_selection": {
+    "days": 1015,
+    "rolls": 19,
+    "monotonic_overrides": 31,
+    "sina_rows": 1015,
+    "sina_match": {
+     "strict": 1014,
+     "relaxed": 0,
+     "near": 1,
+     "enclosed": 0,
+     "ambiguous": 0,
+     "unmatched": 0
+    },
+    "sina_main_agree_days": 686,
+    "sina_main_compared_days": 1015,
+    "sina_settle_equal": 0,
+    "sina_settle_compared": 0,
+    "rolls_since_start": 19
+   }
+  },
+  "T": {
+   "sina_phantom_rows_dropped": [],
+   "source": "cffex",
+   "main_selection": {
+    "days": 2803,
+    "rolls": 45,
+    "monotonic_overrides": 0,
+    "sina_rows": 2353,
+    "sina_match": {
+     "strict": 2330,
+     "relaxed": 1,
+     "near": 15,
+     "enclosed": 7,
+     "ambiguous": 0,
+     "unmatched": 0
+    },
+    "sina_main_agree_days": 2300,
+    "sina_main_compared_days": 2353,
+    "sina_settle_equal": 270,
+    "sina_settle_compared": 270,
+    "rolls_since_start": 45
+   }
+  },
+  "i": {
+   "sina_phantom_rows_dropped": [
+    "20150903",
+    "20151001",
+    "20170102",
+    "20171002"
+   ],
+   "source": "sina",
+   "contract_match": {
+    "strict": 2028,
+    "relaxed": 233,
+    "near": 49,
+    "enclosed": 5,
+    "ambiguous": 0,
+    "unmatched": 536
+   },
+   "legacy_archive_last_day": "20240717",
+   "legacy_contracts_fetched": 94,
+   "reused_identifications": 533,
+   "ppi": {
+    "ppi_days": 0,
+    "ppi_matched": 0,
+    "two_candidate": 0,
+    "rejected_non_monotonic": 0,
+    "enclosed": 0
+   },
+   "open_interest_filled": 2,
+   "excursions_repaired": [
+    "20150623",
+    "20150907",
+    "20151008",
+    "20160405",
+    "20171009",
+    "20201222"
+   ],
+   "gap_filled_days": [
+    "20150225",
+    "20190422"
+   ],
+   "instrument_source_counts": {
+    "contract_bar": 2304,
+    "100ppi": 514,
+    "inferred": 26,
+    "excursion_repaired": 6,
+    "gap_filled": 2
+   },
+   "settle_proxy": "hl2",
+   "settle_proxy_calibration": {
+    "n_known": 2647,
+    "close_mae_ticks": 11.736,
+    "close_p95_ticks": 34.0,
+    "close_mae_bp": 85.005,
+    "hlc3_mae_ticks": 3.96,
+    "hlc3_p95_ticks": 12.0,
+    "hlc3_mae_bp": 28.862,
+    "ohlc4_mae_ticks": 3.385,
+    "ohlc4_p95_ticks": 10.0,
+    "ohlc4_mae_bp": 25.283,
+    "hl2_mae_ticks": 2.266,
+    "hl2_p95_ticks": 7.0,
+    "hl2_mae_bp": 17.102
+   },
+   "settle_estimated_rows": 206,
+   "rolls_since_start": 35
+  },
+  "j": {
+   "sina_phantom_rows_dropped": [
+    "20150903",
+    "20151001",
+    "20170102",
+    "20171002"
+   ],
+   "source": "sina",
+   "contract_match": {
+    "strict": 2145,
+    "relaxed": 8,
+    "near": 147,
+    "enclosed": 15,
+    "ambiguous": 0,
+    "unmatched": 534
+   },
+   "legacy_archive_last_day": "20240717",
+   "legacy_contracts_fetched": 88,
+   "reused_identifications": 533,
+   "ppi": {
+    "ppi_days": 0,
+    "ppi_matched": 0,
+    "two_candidate": 0,
+    "rejected_non_monotonic": 0,
+    "enclosed": 0
+   },
+   "open_interest_filled": 0,
+   "excursions_repaired": [
+    "20150907",
+    "20171009",
+    "20201120",
+    "20201203",
+    "20201209"
+   ],
+   "gap_filled_days": [
+    "20150225",
+    "20150623",
+    "20160405",
+    "20190422"
+   ],
+   "instrument_source_counts": {
+    "contract_bar": 2295,
+    "100ppi": 523,
+    "inferred": 25,
+    "excursion_repaired": 5,
+    "gap_filled": 4
+   },
+   "settle_proxy": "hl2",
+   "settle_proxy_calibration": {
+    "n_known": 2646,
+    "close_mae_ticks": 35.426,
+    "close_p95_ticks": 107.0,
+    "close_mae_bp": 82.431,
+    "hlc3_mae_ticks": 11.799,
+    "hlc3_p95_ticks": 38.0,
+    "hlc3_mae_bp": 27.435,
+    "ohlc4_mae_ticks": 10.512,
+    "ohlc4_p95_ticks": 32.0,
+    "ohlc4_mae_bp": 25.618,
+    "hl2_mae_ticks": 7.045,
+    "hl2_p95_ticks": 22.75,
+    "hl2_mae_bp": 17.223
+   },
+   "settle_estimated_rows": 207,
+   "rolls_since_start": 35
+  },
+  "m": {
+   "sina_phantom_rows_dropped": [
+    "20150903",
+    "20151001",
+    "20170102"
+   ],
+   "source": "sina",
+   "contract_match": {
+    "strict": 2017,
+    "relaxed": 292,
+    "near": 9,
+    "enclosed": 0,
+    "ambiguous": 0,
+    "unmatched": 534
+   },
+   "legacy_archive_last_day": "20240717",
+   "legacy_contracts_fetched": 57,
+   "reused_identifications": 533,
+   "ppi": {
+    "ppi_days": 0,
+    "ppi_matched": 0,
+    "two_candidate": 0,
+    "rejected_non_monotonic": 0,
+    "enclosed": 0
+   },
+   "open_interest_filled": 0,
+   "excursions_repaired": [
+    "20150623",
+    "20150907",
+    "20151008",
+    "20160405",
+    "20171009"
+   ],
+   "gap_filled_days": [
+    "20190422"
+   ],
+   "instrument_source_counts": {
+    "contract_bar": 2313,
+    "100ppi": 509,
+    "inferred": 24,
+    "excursion_repaired": 5,
+    "gap_filled": 1
+   },
+   "settle_proxy": "hl2",
+   "settle_proxy_calibration": {
+    "n_known": 2649,
+    "close_mae_ticks": 12.372,
+    "close_p95_ticks": 35.0,
+    "close_mae_bp": 38.967,
+    "hlc3_mae_ticks": 3.676,
+    "hlc3_p95_ticks": 11.0,
+    "hlc3_mae_bp": 11.573,
+    "ohlc4_mae_ticks": 4.365,
+    "ohlc4_p95_ticks": 12.0,
+    "ohlc4_mae_bp": 13.759,
+    "hl2_mae_ticks": 3.183,
+    "hl2_p95_ticks": 9.0,
+    "hl2_mae_bp": 10.08
+   },
+   "settle_estimated_rows": 204,
+   "rolls_since_start": 35
+  },
+  "rb": {
+   "sina_phantom_rows_dropped": [
+    "20150903",
+    "20151001",
+    "20170102"
+   ],
+   "source": "shfe",
+   "main_selection": {
+    "days": 2852,
+    "rolls": 35,
+    "monotonic_overrides": 0,
+    "sina_rows": 2851,
+    "sina_match": {
+     "strict": 2674,
+     "relaxed": 145,
+     "near": 26,
+     "enclosed": 5,
+     "ambiguous": 0,
+     "unmatched": 1
+    },
+    "sina_main_agree_days": 2801,
+    "sina_main_compared_days": 2850,
+    "sina_settle_equal": 2775,
+    "sina_settle_compared": 2797,
+    "rolls_since_start": 35
+   }
+  },
+  "hc": {
+   "sina_phantom_rows_dropped": [
+    "20150903",
+    "20151001",
+    "20170102"
+   ],
+   "source": "shfe",
+   "main_selection": {
+    "days": 2852,
+    "rolls": 35,
+    "monotonic_overrides": 0,
+    "sina_rows": 2852,
+    "sina_match": {
+     "strict": 2824,
+     "relaxed": 10,
+     "near": 11,
+     "enclosed": 6,
+     "ambiguous": 0,
+     "unmatched": 1
+    },
+    "sina_main_agree_days": 2825,
+    "sina_main_compared_days": 2851,
+    "sina_settle_equal": 2802,
+    "sina_settle_compared": 2821,
+    "rolls_since_start": 35
+   }
+  },
+  "cu": {
+   "sina_phantom_rows_dropped": [
+    "20150903",
+    "20151001",
+    "20170102"
+   ],
+   "source": "shfe",
+   "main_selection": {
+    "days": 2852,
+    "rolls": 139,
+    "monotonic_overrides": 0,
+    "sina_rows": 2851,
+    "sina_match": {
+     "strict": 2494,
+     "relaxed": 340,
+     "near": 13,
+     "enclosed": 3,
+     "ambiguous": 2,
+     "unmatched": 1
+    },
+    "sina_main_agree_days": 2709,
+    "sina_main_compared_days": 2850,
+    "sina_settle_equal": 2682,
+    "sina_settle_compared": 2705,
+    "rolls_since_start": 139
+   }
+  },
+  "au": {
+   "sina_phantom_rows_dropped": [
+    "20150903",
+    "20151001",
+    "20170102"
+   ],
+   "source": "shfe",
+   "main_selection": {
+    "days": 2852,
+    "rolls": 40,
+    "monotonic_overrides": 0,
+    "sina_rows": 2852,
+    "sina_match": {
+     "strict": 2626,
+     "relaxed": 180,
+     "near": 42,
+     "enclosed": 3,
+     "ambiguous": 0,
+     "unmatched": 1
+    },
+    "sina_main_agree_days": 2613,
+    "sina_main_compared_days": 2851,
+    "sina_settle_equal": 2596,
+    "sina_settle_compared": 2611,
+    "rolls_since_start": 40
+   }
+  }
+ },
+ "files": {
+  "daily/au.parquet": {
+   "rows": 2852,
+   "bytes": 116655,
+   "sha256": "feaff9ca6e2807445a5a26cff040f702a89a3c5c81da22fe77fae90560b7b9bd"
+  },
+  "daily/CFFEX/IC.parquet": {
+   "rows": 11140,
+   "bytes": 420072,
+   "sha256": "62a9c2af9a5670e0fcab2ec8d572219e1b4c9e16176ceb1112307d28b6708d6b"
+  },
+  "daily/CFFEX/IF.parquet": {
+   "rows": 11408,
+   "bytes": 413543,
+   "sha256": "3b22b98d526cead1eba24a5c33f5e2247b4b7932893e5ca1fdedaef0d5d8fb1d"
+  },
+  "daily/CFFEX/IH.parquet": {
+   "rows": 11140,
+   "bytes": 371349,
+   "sha256": "eee6d6052bf43d35e1b11d0adc1567ac71ca3847118c64cc05331fa1ab154703"
+  },
+  "daily/CFFEX/IM.parquet": {
+   "rows": 4060,
+   "bytes": 163423,
+   "sha256": "4284c4f8d88483a76b894736fdd5675e6b0904b38f50a5287203dad5685c8b58"
+  },
+  "daily/CFFEX/T.parquet": {
+   "rows": 8409,
+   "bytes": 266724,
+   "sha256": "4b6400fccbc5e38ba0947d7f9d2f7f2d24e64b5c6971878913a3701d25a3b5b1"
+  },
+  "daily/cu.parquet": {
+   "rows": 2852,
+   "bytes": 104862,
+   "sha256": "33b0d8e81e1be4deb27affd823833df3edc36734daa8e230a1fcd4aea1511db7"
+  },
+  "daily/DCE/i.parquet": {
+   "rows": 18576,
+   "bytes": 235424,
+   "sha256": "68f28c7a3b786c72cd380c4df048d9f4405b7776bd7ad01a713d91f28dd9eba6"
+  },
+  "daily/DCE/j.parquet": {
+   "rows": 13304,
+   "bytes": 207656,
+   "sha256": "f88b72bd5e80c52ba985aca7044127b5420d5977cebde2408012663631cb2082"
+  },
+  "daily/DCE/m.parquet": {
+   "rows": 10823,
+   "bytes": 166893,
+   "sha256": "a53b98669913758b9d83781f79422a827a6c4f932230d83724392b5438748b9f"
+  },
+  "daily/hc.parquet": {
+   "rows": 2852,
+   "bytes": 89420,
+   "sha256": "0357fe77f6d937eafa6ce38e6c352d97f37634384b090a312cac7dd9886c9207"
+  },
+  "daily/i.parquet": {
+   "rows": 2852,
+   "bytes": 85697,
+   "sha256": "7d5e948f63f16f87a22e32982e81ac80486c86a1e458e60a376b3a2c457d4f0a"
+  },
+  "daily/IC.parquet": {
+   "rows": 2785,
+   "bytes": 110240,
+   "sha256": "beb3f57bfcb2e53c80eb6ac3308aeb109413c75963d670e5fc2d9fb49201711e"
+  },
+  "daily/IF.parquet": {
+   "rows": 2852,
+   "bytes": 109991,
+   "sha256": "2969b3fe6e985cb1a3635538a17d443fc2b8dc55ef877960d8a8acad69c18e29"
+  },
+  "daily/IH.parquet": {
+   "rows": 2785,
+   "bytes": 103153,
+   "sha256": "e4cfc21a2a123bea4d856967a16e4ac539a08e226edc73c1cbcfd3825dc08c1a"
+  },
+  "daily/IM.parquet": {
+   "rows": 1015,
+   "bytes": 45457,
+   "sha256": "0e774eeabec537f95ec7216c4a1027f669c2ec51cbcda5901248a32191fa603b"
+  },
+  "daily/j.parquet": {
+   "rows": 2852,
+   "bytes": 92213,
+   "sha256": "380a30a6fbb09c72f922745f948ad91d53f4d9b65dd53a206465dbd3cfbd4168"
+  },
+  "daily/m.parquet": {
+   "rows": 2852,
+   "bytes": 86224,
+   "sha256": "a67916df89cce1f3c34a19e61880255cc8c37f09e44ba9ed49622a8b741a096f"
+  },
+  "daily/rb.parquet": {
+   "rows": 2852,
+   "bytes": 90907,
+   "sha256": "0981a2aa12b49e491b9c688eae276d410d2e18d185e1ff9c8509417265a636fe"
+  },
+  "daily/SHFE/au.parquet": {
+   "rows": 22746,
+   "bytes": 612244,
+   "sha256": "4d01f02c5a2bccca56ab5bd5014d13c07774c8269ca6e4072579882888f74f16"
+  },
+  "daily/SHFE/cu.parquet": {
+   "rows": 34221,
+   "bytes": 766849,
+   "sha256": "59106a2f323f1662e6cad3f520354977c9c9f0300abeee74aef2ed25672994ec"
+  },
+  "daily/SHFE/hc.parquet": {
+   "rows": 34221,
+   "bytes": 611739,
+   "sha256": "c7a510f27f3c7c6f7bf801ae10ad532de40e5990eab0698fb5fb049bf09877d5"
+  },
+  "daily/SHFE/rb.parquet": {
+   "rows": 34221,
+   "bytes": 707047,
+   "sha256": "626ef9d7c78b47bd1988019e320dad8b2ef6760af60dbc8fdd827f12cd40d80a"
+  },
+  "daily/T.parquet": {
+   "rows": 2803,
+   "bytes": 97633,
+   "sha256": "122fdeac0c8379fe9fcd3aa86dcedaac3b3c86cae7637bda956e705a0dd6d859"
+  },
+  "minute/au_15m.parquet": {
+   "rows": 1021,
+   "bytes": 38733,
+   "sha256": "3e1fdb905467b504ed694f39d6164a69eb8edc73c8a7f1ca76baa73dfd45a76c"
+  },
+  "minute/au_5m.parquet": {
+   "rows": 1023,
+   "bytes": 35058,
+   "sha256": "b1c09e774668d414ed479ac0d7b661911f0d90622b8dfc4821871f61b26419b6"
+  },
+  "minute/au_60m.parquet": {
+   "rows": 1023,
+   "bytes": 40790,
+   "sha256": "79fd464b10afb5dd7be31d8dbe36bc92e0668fc846c75e7ba32055fc86d4d798"
+  },
+  "minute/cu_15m.parquet": {
+   "rows": 1021,
+   "bytes": 32096,
+   "sha256": "e430516efe6a0e8386719ce2ecdf6992cef1a7d9c9690722670ddb8b4f8df5e4"
+  },
+  "minute/cu_5m.parquet": {
+   "rows": 1023,
+   "bytes": 31011,
+   "sha256": "5a9d187adaaf21ff7f750b36a43eeff854736c11ba1e6a1d05c1c63d4f2288f0"
+  },
+  "minute/cu_60m.parquet": {
+   "rows": 1018,
+   "bytes": 35846,
+   "sha256": "8727686cd68abe50c1ed64ffce6432f577436b750ffd00ab639d1cd8f2c734fd"
+  },
+  "minute/hc_15m.parquet": {
+   "rows": 1023,
+   "bytes": 30578,
+   "sha256": "2826ab03383323ce526dfd426895a27096618ec33e2032ba889932c3fb81bc96"
+  },
+  "minute/hc_5m.parquet": {
+   "rows": 1023,
+   "bytes": 28435,
+   "sha256": "99ec2213a9e108293daba2735dec5439323a84f899e7692f83231e60db7f0e91"
+  },
+  "minute/hc_60m.parquet": {
+   "rows": 1023,
+   "bytes": 31844,
+   "sha256": "8e7c2820ae6396afac6096b8d177c39274b90edd6a60f15325696f7979fd3bb6"
+  },
+  "minute/i_15m.parquet": {
+   "rows": 1023,
+   "bytes": 28929,
+   "sha256": "af79b6e13ba9e38f3c408a33144495c571515c2637dd8c90e43e0e1e50239b60"
+  },
+  "minute/i_5m.parquet": {
+   "rows": 1023,
+   "bytes": 28228,
+   "sha256": "8715bf93c697183563a9cd04890132f26333f6dfe317c2a77e963933c274437c"
+  },
+  "minute/i_60m.parquet": {
+   "rows": 1023,
+   "bytes": 31380,
+   "sha256": "1bd493a74063986bf562f07480b502560a4432e0286cb44774e24f8035308aa1"
+  },
+  "minute/IC_15m.parquet": {
+   "rows": 1023,
+   "bytes": 38873,
+   "sha256": "91590724017feb7dfc677987046b94b05acc7d5d2e95d748371775b34f1bde0d"
+  },
+  "minute/IC_5m.parquet": {
+   "rows": 1023,
+   "bytes": 35223,
+   "sha256": "cc8138640b36385050773d3076549892cdfbf1b118aaa881d59bfab6a85919aa"
+  },
+  "minute/IC_60m.parquet": {
+   "rows": 1023,
+   "bytes": 40921,
+   "sha256": "57a55fbc0098456da0a7391ec7790e9236c14639795951950e7b8316f9b22734"
+  },
+  "minute/IF_15m.parquet": {
+   "rows": 1023,
+   "bytes": 36267,
+   "sha256": "8e3a3edfff7b95f93bea8dc5a10979f90a17673c6f23ac3ab240f9fca8220cdc"
+  },
+  "minute/IF_5m.parquet": {
+   "rows": 1023,
+   "bytes": 33655,
+   "sha256": "3266027f5f3633178660c0b73ed2e1423173b2f8c15a8405c8f7e709d51638ca"
+  },
+  "minute/IF_60m.parquet": {
+   "rows": 1023,
+   "bytes": 38429,
+   "sha256": "8b29da64d085e3af70a19f4719158957f2e7149817e16eeafeb2952e8ae95b15"
+  },
+  "minute/IH_15m.parquet": {
+   "rows": 1023,
+   "bytes": 33902,
+   "sha256": "5d5e89e29ece694619632b6e9d469d3edbd0a32ae62e861f19aa7f6dcf88a31f"
+  },
+  "minute/IH_5m.parquet": {
+   "rows": 1023,
+   "bytes": 31515,
+   "sha256": "ce1469b8a33bf4a34b1f373fd14051652a3115f9a2442ca25582a09263cafe71"
+  },
+  "minute/IH_60m.parquet": {
+   "rows": 1023,
+   "bytes": 37489,
+   "sha256": "b7ca2427a4dabfd6aab7652632994d4c582b8efc80d800499b3126c3d0dd42eb"
+  },
+  "minute/IM_15m.parquet": {
+   "rows": 1023,
+   "bytes": 38077,
+   "sha256": "7f1d081952cda8fe0ce234ab164717b9875c6da6da8572635033a66370b8596e"
+  },
+  "minute/IM_5m.parquet": {
+   "rows": 1023,
+   "bytes": 35117,
+   "sha256": "0385634af849b7618d94e3a5a77f801a3ff6cd60dc5c8102c489cb83b970f93b"
+  },
+  "minute/IM_60m.parquet": {
+   "rows": 1023,
+   "bytes": 41429,
+   "sha256": "cf4446317c164c65a9986ae990276a71bcda29205016cd3e4ca6b1e12424b2a7"
+  },
+  "minute/j_15m.parquet": {
+   "rows": 1023,
+   "bytes": 31980,
+   "sha256": "7179ec9f0caf7989602f1e96b133501b18a547fff0e812645b32f8b71a72ccbf"
+  },
+  "minute/j_5m.parquet": {
+   "rows": 1023,
+   "bytes": 29208,
+   "sha256": "038383060a6c076f5f447a614ce5f8f036f56bcfab91b2594d00d089019c5d3a"
+  },
+  "minute/j_60m.parquet": {
+   "rows": 1023,
+   "bytes": 33347,
+   "sha256": "bc2ad7b36e66df18bad3bb8d136f41be71f4604219fcaaf44943f3ccc668766e"
+  },
+  "minute/m_15m.parquet": {
+   "rows": 1023,
+   "bytes": 32190,
+   "sha256": "138eeb79f54eea880f7280e74fb522c9ab587cba5e1a12429ea10bf9521a52ce"
+  },
+  "minute/m_5m.parquet": {
+   "rows": 1023,
+   "bytes": 29116,
+   "sha256": "0ac3ad5cd111b2ab0b3e3cdef0d1c38d2d19579e765e80564b37bf4064abd3bc"
+  },
+  "minute/m_60m.parquet": {
+   "rows": 1023,
+   "bytes": 33861,
+   "sha256": "41fb59ffedb665f5a971a2471410b6db08f747a69fbcde919f340aa56595ca5b"
+  },
+  "minute/rb_15m.parquet": {
+   "rows": 1023,
+   "bytes": 30998,
+   "sha256": "8b55934c991e54b2866f9363fabd2419cd27bc43d7ebd1c628b678c1fcf9d15c"
+  },
+  "minute/rb_5m.parquet": {
+   "rows": 1023,
+   "bytes": 28555,
+   "sha256": "8b374e6fdc9dd56bbda58ad04192ba4926e774f9729db5ff535df985606977ff"
+  },
+  "minute/rb_60m.parquet": {
+   "rows": 1023,
+   "bytes": 32311,
+   "sha256": "ea2a3ae07403245392f0f85319c0a8a136abdd18af49509ad0032a3c1a5cf2f1"
+  },
+  "minute/T_15m.parquet": {
+   "rows": 1023,
+   "bytes": 29814,
+   "sha256": "728d213aae25d4ea2a89414e2b49dcdb3d57f2bc6c377d56734500c585c9d4fd"
+  },
+  "minute/T_5m.parquet": {
+   "rows": 1023,
+   "bytes": 28834,
+   "sha256": "48925e07911125389872b165f8243142022255c43e8081c3698c4d7d2acad5e6"
+  },
+  "minute/T_60m.parquet": {
+   "rows": 1023,
+   "bytes": 34034,
+   "sha256": "f5b737932ef03acc120914d5194f56b11009787d10e109145507bb22968877a3"
+  },
+  "official/CFFEX.parquet": {
+   "rows": 140,
+   "bytes": 14818,
+   "sha256": "a22fdc115a1a716178a170891abec3d5dfa008124b67a1c47e969e2b44b2a722"
+  },
+  "official/SHFE.parquet": {
+   "rows": 1520,
+   "bytes": 55499,
+   "sha256": "e13aa815abefcf36417b03a9b2d628b8c7ad541d9853e5a19bc388bf90dd1ef7"
+  }
+ },
+ "checks": {
+  "daily": {
+   "rb": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2852
+    },
+    "instrument_source": {
+     "exchange": 2852
+    },
+    "rolls": 35,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "hc": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2852
+    },
+    "instrument_source": {
+     "exchange": 2852
+    },
+    "rolls": 35,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "cu": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2852
+    },
+    "instrument_source": {
+     "exchange": 2852
+    },
+    "rolls": 139,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "au": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2852
+    },
+    "instrument_source": {
+     "exchange": 2852
+    },
+    "rolls": 40,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "i": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 36,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "sina": 2646,
+     "estimated": 206
+    },
+    "instrument_source": {
+     "contract_bar": 2304,
+     "100ppi": 514,
+     "inferred": 26,
+     "excursion_repaired": 6,
+     "gap_filled": 2
+    },
+    "rolls": 35,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "j": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 36,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "sina": 2645,
+     "estimated": 207
+    },
+    "instrument_source": {
+     "contract_bar": 2295,
+     "100ppi": 523,
+     "inferred": 25,
+     "excursion_repaired": 5,
+     "gap_filled": 4
+    },
+    "rolls": 35,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "m": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 36,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "sina": 2648,
+     "estimated": 204
+    },
+    "instrument_source": {
+     "contract_bar": 2313,
+     "100ppi": 509,
+     "inferred": 24,
+     "excursion_repaired": 5,
+     "gap_filled": 1
+    },
+    "rolls": 35,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "IF": {
+    "excursions": [],
+    "rows": 2852,
+    "first": "20150105",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2852
+    },
+    "instrument_source": {
+     "exchange": 2852
+    },
+    "rolls": 86,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "IH": {
+    "excursions": [],
+    "rows": 2785,
+    "first": "20150416",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2785
+    },
+    "instrument_source": {
+     "exchange": 2785
+    },
+    "rolls": 85,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "IC": {
+    "excursions": [],
+    "rows": 2785,
+    "first": "20150416",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2785
+    },
+    "instrument_source": {
+     "exchange": 2785
+    },
+    "rolls": 76,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "IM": {
+    "excursions": [],
+    "rows": 1015,
+    "first": "20220722",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 1015
+    },
+    "instrument_source": {
+     "exchange": 1015
+    },
+    "rolls": 19,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   },
+   "T": {
+    "excursions": [],
+    "rows": 2803,
+    "first": "20150320",
+    "last": "20260924",
+    "nan_key_cols": {},
+    "nan_pre_settle": 0,
+    "nan_contract_pre_settle": 0,
+    "settle_nonpositive": 0,
+    "settle_source": {
+     "exchange": 2803
+    },
+    "instrument_source": {
+     "exchange": 2803
+    },
+    "rolls": 45,
+    "unknown_instrument": 0,
+    "duplicate_days": 0,
+    "missing_trading_days": [],
+    "missing_trading_days_count": 0,
+    "ohlc_inconsistent": 0
+   }
+  },
+  "contracts": {
+   "rb": {
+    "file": "daily/SHFE/rb.parquet",
+    "rows": 34221,
+    "contracts": 153,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 0
+   },
+   "hc": {
+    "file": "daily/SHFE/hc.parquet",
+    "rows": 34221,
+    "contracts": 153,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 0
+   },
+   "cu": {
+    "file": "daily/SHFE/cu.parquet",
+    "rows": 34221,
+    "contracts": 153,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 0
+   },
+   "au": {
+    "file": "daily/SHFE/au.parquet",
+    "rows": 22746,
+    "contracts": 149,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 0
+   },
+   "i": {
+    "file": "daily/DCE/i.parquet",
+    "rows": 18576,
+    "contracts": 91,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 15724
+   },
+   "j": {
+    "file": "daily/DCE/j.parquet",
+    "rows": 13304,
+    "contracts": 85,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 10452
+   },
+   "m": {
+    "file": "daily/DCE/m.parquet",
+    "rows": 10823,
+    "contracts": 54,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 7971
+   },
+   "IF": {
+    "file": "daily/CFFEX/IF.parquet",
+    "rows": 11408,
+    "contracts": 145,
+    "first": "20150105",
+    "last": "20260924",
+    "days_with_one_main": 2852,
+    "days": 2852,
+    "settle_nan_rows": 0
+   },
+   "IH": {
+    "file": "daily/CFFEX/IH.parquet",
+    "rows": 11140,
+    "contracts": 141,
+    "first": "20150416",
+    "last": "20260924",
+    "days_with_one_main": 2785,
+    "days": 2785,
+    "settle_nan_rows": 0
+   },
+   "IC": {
+    "file": "daily/CFFEX/IC.parquet",
+    "rows": 11140,
+    "contracts": 141,
+    "first": "20150416",
+    "last": "20260924",
+    "days_with_one_main": 2785,
+    "days": 2785,
+    "settle_nan_rows": 0
+   },
+   "IM": {
+    "file": "daily/CFFEX/IM.parquet",
+    "rows": 4060,
+    "contracts": 54,
+    "first": "20220722",
+    "last": "20260924",
+    "days_with_one_main": 1015,
+    "days": 1015,
+    "settle_nan_rows": 0
+   },
+   "T": {
+    "file": "daily/CFFEX/T.parquet",
+    "rows": 8409,
+    "contracts": 48,
+    "first": "20150320",
+    "last": "20260924",
+    "days_with_one_main": 2803,
+    "days": 2803,
+    "settle_nan_rows": 0
+   }
+  },
+  "minute": {
+   "rb_5m": {
+    "rows": 1023,
+    "first": "2026-09-03T22:05:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 15,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 0,
+    "zero_volume_bars": 3,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 14,
+     "volume_ratio_median": 0.881,
+     "volume_ratio_p10": 0.84,
+     "days_volume_below_half": 0,
+     "days_high_low_within_1_tick": 12
+    }
+   },
+   "rb_15m": {
+    "rows": 1023,
+    "first": "2026-07-24T10:15:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 45,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 44,
+     "volume_ratio_median": 0.874,
+     "volume_ratio_p10": 0.51,
+     "days_volume_below_half": 5,
+     "days_high_low_within_1_tick": 41
+    }
+   },
+   "rb_60m": {
+    "rows": 1023,
+    "first": "2026-01-12T23:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 172,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 2,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 171,
+     "volume_ratio_median": 0.643,
+     "volume_ratio_p10": 0.265,
+     "days_volume_below_half": 46,
+     "days_high_low_within_1_tick": 155
+    }
+   },
+   "hc_5m": {
+    "rows": 1023,
+    "first": "2026-09-03T22:05:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 15,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 0,
+    "zero_volume_bars": 2,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 14,
+     "volume_ratio_median": 0.957,
+     "volume_ratio_p10": 0.943,
+     "days_volume_below_half": 0,
+     "days_high_low_within_1_tick": 12
+    }
+   },
+   "hc_15m": {
+    "rows": 1023,
+    "first": "2026-07-24T10:15:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 45,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 44,
+     "volume_ratio_median": 0.881,
+     "volume_ratio_p10": 0.414,
+     "days_volume_below_half": 6,
+     "days_high_low_within_1_tick": 37
+    }
+   },
+   "hc_60m": {
+    "rows": 1023,
+    "first": "2026-01-12T23:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 172,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 2,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 171,
+     "volume_ratio_median": 0.652,
+     "volume_ratio_p10": 0.147,
+     "days_volume_below_half": 47,
+     "days_high_low_within_1_tick": 156
+    }
+   },
+   "cu_5m": {
+    "rows": 1023,
+    "first": "2026-09-09T21:05:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 11,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 5,
+    "quality": {
+     "midnight_relabelled": 2
+    },
+    "daily_consistency": {
+     "days_compared": 10,
+     "volume_ratio_median": 0.83,
+     "volume_ratio_p10": 0.619,
+     "days_volume_below_half": 1,
+     "days_high_low_within_1_tick": 7
+    }
+   },
+   "cu_15m": {
+    "rows": 1021,
+    "first": "2026-08-10T21:45:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 33,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 2,
+    "zero_volume_bars": 1,
+    "quality": {
+     "midnight_relabelled": 6
+    },
+    "daily_consistency": {
+     "days_compared": 32,
+     "volume_ratio_median": 0.755,
+     "volume_ratio_p10": 0.456,
+     "days_volume_below_half": 5,
+     "days_high_low_within_1_tick": 21
+    }
+   },
+   "cu_60m": {
+    "rows": 1018,
+    "first": "2026-03-21T00:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 129,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 6,
+    "zero_volume_bars": 0,
+    "quality": {
+     "midnight_relabelled": 23,
+     "offsession_label": 1
+    },
+    "daily_consistency": {
+     "days_compared": 128,
+     "volume_ratio_median": 0.636,
+     "volume_ratio_p10": 0.274,
+     "days_volume_below_half": 34,
+     "days_high_low_within_1_tick": 77
+    }
+   },
+   "au_5m": {
+    "rows": 1023,
+    "first": "2026-09-11T11:05:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 10,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 0,
+    "zero_volume_bars": 3,
+    "quality": {
+     "midnight_relabelled": 2
+    },
+    "daily_consistency": {
+     "days_compared": 9,
+     "volume_ratio_median": 0.962,
+     "volume_ratio_p10": 0.83,
+     "days_volume_below_half": 0,
+     "days_high_low_within_1_tick": 4
+    }
+   },
+   "au_15m": {
+    "rows": 1021,
+    "first": "2026-08-18T01:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 28,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {
+     "midnight_relabelled": 5
+    },
+    "daily_consistency": {
+     "days_compared": 27,
+     "volume_ratio_median": 0.897,
+     "volume_ratio_p10": 0.752,
+     "days_volume_below_half": 2,
+     "days_high_low_within_1_tick": 7
+    }
+   },
+   "au_60m": {
+    "rows": 1023,
+    "first": "2026-04-30T10:45:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 102,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 3,
+    "zero_volume_bars": 1,
+    "quality": {
+     "midnight_relabelled": 19,
+     "offsession_label": 19
+    },
+    "daily_consistency": {
+     "days_compared": 101,
+     "volume_ratio_median": 0.623,
+     "volume_ratio_p10": 0.209,
+     "days_volume_below_half": 30,
+     "days_high_low_within_1_tick": 18
+    }
+   },
+   "i_5m": {
+    "rows": 1023,
+    "first": "2026-09-03T22:05:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 15,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 0,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 14,
+     "volume_ratio_median": 0.969,
+     "volume_ratio_p10": 0.722,
+     "days_volume_below_half": 0,
+     "days_high_low_within_1_tick": 12
+    }
+   },
+   "i_15m": {
+    "rows": 1023,
+    "first": "2026-07-24T10:15:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 45,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 44,
+     "volume_ratio_median": 0.879,
+     "volume_ratio_p10": 0.491,
+     "days_volume_below_half": 5,
+     "days_high_low_within_1_tick": 40
+    }
+   },
+   "i_60m": {
+    "rows": 1023,
+    "first": "2026-01-12T23:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 172,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 2,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 171,
+     "volume_ratio_median": 0.703,
+     "volume_ratio_p10": 0.229,
+     "days_volume_below_half": 37,
+     "days_high_low_within_1_tick": 153
+    }
+   },
+   "j_5m": {
+    "rows": 1023,
+    "first": "2026-09-03T22:05:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 15,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 0,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 14,
+     "volume_ratio_median": 0.968,
+     "volume_ratio_p10": 0.688,
+     "days_volume_below_half": 1,
+     "days_high_low_within_1_tick": 7
+    }
+   },
+   "j_15m": {
+    "rows": 1023,
+    "first": "2026-07-24T10:15:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 45,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 44,
+     "volume_ratio_median": 0.936,
+     "volume_ratio_p10": 0.468,
+     "days_volume_below_half": 5,
+     "days_high_low_within_1_tick": 23
+    }
+   },
+   "j_60m": {
+    "rows": 1023,
+    "first": "2026-01-12T23:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 172,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 2,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 171,
+     "volume_ratio_median": 0.778,
+     "volume_ratio_p10": 0.274,
+     "days_volume_below_half": 32,
+     "days_high_low_within_1_tick": 91
+    }
+   },
+   "m_5m": {
+    "rows": 1023,
+    "first": "2026-09-03T22:05:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 15,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 0,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 14,
+     "volume_ratio_median": 0.945,
+     "volume_ratio_p10": 0.933,
+     "days_volume_below_half": 0,
+     "days_high_low_within_1_tick": 12
+    }
+   },
+   "m_15m": {
+    "rows": 1023,
+    "first": "2026-07-24T10:15:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 45,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 44,
+     "volume_ratio_median": 0.91,
+     "volume_ratio_p10": 0.472,
+     "days_volume_below_half": 5,
+     "days_high_low_within_1_tick": 40
+    }
+   },
+   "m_60m": {
+    "rows": 1023,
+    "first": "2026-01-12T23:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 172,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 2,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 171,
+     "volume_ratio_median": 0.623,
+     "volume_ratio_p10": 0.239,
+     "days_volume_below_half": 51,
+     "days_high_low_within_1_tick": 152
+    }
+   },
+   "IF_5m": {
+    "rows": 1023,
+    "first": "2026-08-26T13:50:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 22,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 1,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 21,
+     "volume_ratio_median": 0.953,
+     "volume_ratio_p10": 0.903,
+     "days_volume_below_half": 0,
+     "days_high_low_within_1_tick": 13
+    }
+   },
+   "IF_15m": {
+    "rows": 1023,
+    "first": "2026-06-29T10:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 64,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 63,
+     "volume_ratio_median": 0.898,
+     "volume_ratio_p10": 0.529,
+     "days_volume_below_half": 6,
+     "days_high_low_within_1_tick": 28
+    }
+   },
+   "IF_60m": {
+    "rows": 1023,
+    "first": "2025-09-05T11:30:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 256,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 5,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 255,
+     "volume_ratio_median": 0.648,
+     "volume_ratio_p10": 0.03,
+     "days_volume_below_half": 84,
+     "days_high_low_within_1_tick": 127
+    }
+   },
+   "IH_5m": {
+    "rows": 1023,
+    "first": "2026-08-26T13:50:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 22,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 1,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 21,
+     "volume_ratio_median": 0.893,
+     "volume_ratio_p10": 0.455,
+     "days_volume_below_half": 4,
+     "days_high_low_within_1_tick": 10
+    }
+   },
+   "IH_15m": {
+    "rows": 1023,
+    "first": "2026-06-29T10:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 64,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 63,
+     "volume_ratio_median": 0.826,
+     "volume_ratio_p10": 0.101,
+     "days_volume_below_half": 19,
+     "days_high_low_within_1_tick": 28
+    }
+   },
+   "IH_60m": {
+    "rows": 1023,
+    "first": "2025-09-05T11:30:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 256,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 5,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 255,
+     "volume_ratio_median": 0.674,
+     "volume_ratio_p10": 0.031,
+     "days_volume_below_half": 59,
+     "days_high_low_within_1_tick": 148
+    }
+   },
+   "IC_5m": {
+    "rows": 1023,
+    "first": "2026-08-26T13:45:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 22,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 21,
+     "volume_ratio_median": 0.944,
+     "volume_ratio_p10": 0.454,
+     "days_volume_below_half": 3,
+     "days_high_low_within_1_tick": 7
+    }
+   },
+   "IC_15m": {
+    "rows": 1023,
+    "first": "2026-06-29T10:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 64,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 63,
+     "volume_ratio_median": 0.873,
+     "volume_ratio_p10": 0.12,
+     "days_volume_below_half": 12,
+     "days_high_low_within_1_tick": 13
+    }
+   },
+   "IC_60m": {
+    "rows": 1023,
+    "first": "2025-09-05T11:30:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 256,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 5,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 255,
+     "volume_ratio_median": 0.55,
+     "volume_ratio_p10": 0.018,
+     "days_volume_below_half": 94,
+     "days_high_low_within_1_tick": 75
+    }
+   },
+   "IM_5m": {
+    "rows": 1023,
+    "first": "2026-08-26T13:50:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 22,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 21,
+     "volume_ratio_median": 0.889,
+     "volume_ratio_p10": 0.383,
+     "days_volume_below_half": 3,
+     "days_high_low_within_1_tick": 4
+    }
+   },
+   "IM_15m": {
+    "rows": 1023,
+    "first": "2026-06-29T10:00:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 64,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 63,
+     "volume_ratio_median": 0.781,
+     "volume_ratio_p10": 0.089,
+     "days_volume_below_half": 22,
+     "days_high_low_within_1_tick": 9
+    }
+   },
+   "IM_60m": {
+    "rows": 1023,
+    "first": "2025-09-05T11:30:00+08:00",
+    "last": "2026-09-24T15:00:00+08:00",
+    "trading_days": 256,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 5,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 255,
+     "volume_ratio_median": 0.569,
+     "volume_ratio_p10": 0.025,
+     "days_volume_below_half": 80,
+     "days_high_low_within_1_tick": 54
+    }
+   },
+   "T_5m": {
+    "rows": 1023,
+    "first": "2026-08-27T15:05:00+08:00",
+    "last": "2026-09-24T15:15:00+08:00",
+    "trading_days": 21,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 0,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 20,
+     "volume_ratio_median": 0.912,
+     "volume_ratio_p10": 0.839,
+     "days_volume_below_half": 1,
+     "days_high_low_within_1_tick": 20
+    }
+   },
+   "T_15m": {
+    "rows": 1023,
+    "first": "2026-07-02T14:45:00+08:00",
+    "last": "2026-09-24T15:15:00+08:00",
+    "trading_days": 61,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 1,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 60,
+     "volume_ratio_median": 0.854,
+     "volume_ratio_p10": 0.476,
+     "days_volume_below_half": 7,
+     "days_high_low_within_1_tick": 52
+    }
+   },
+   "T_60m": {
+    "rows": 1023,
+    "first": "2025-11-25T14:00:00+08:00",
+    "last": "2026-09-24T15:15:00+08:00",
+    "trading_days": 205,
+    "nan": {},
+    "unknown_instrument": 0,
+    "rolls": 3,
+    "zero_volume_bars": 0,
+    "quality": {},
+    "daily_consistency": {
+     "days_compared": 204,
+     "volume_ratio_median": 0.616,
+     "volume_ratio_p10": 0.032,
+     "days_volume_below_half": 59,
+     "days_high_low_within_1_tick": 178
+    }
+   }
+  },
+  "official": {
+   "SHFE": {
+    "rows": 1520,
+    "days": [
+     "20260918",
+     "20260921",
+     "20260922",
+     "20260923",
+     "20260924"
+    ],
+    "products": 26,
+    "settle_rounding_check": {
+     "rb": {
+      "contracts": 60,
+      "settle_eq_floor_tick_vwap": 60,
+      "settle_eq_round_tick_vwap": 27
+     },
+     "hc": {
+      "contracts": 58,
+      "settle_eq_floor_tick_vwap": 58,
+      "settle_eq_round_tick_vwap": 32
+     },
+     "cu": {
+      "contracts": 60,
+      "settle_eq_floor_tick_vwap": 60,
+      "settle_eq_round_tick_vwap": 33
+     },
+     "au": {
+      "contracts": 40,
+      "settle_eq_floor_tick_vwap": 40,
+      "settle_eq_round_tick_vwap": 22
+     }
+    }
+   },
+   "CFFEX": {
+    "rows": 140,
+    "days": [
+     "20260918",
+     "20260921",
+     "20260922",
+     "20260923",
+     "20260924"
+    ],
+    "products": 8
+   }
+  },
+  "stress_windows": [
+   {
+    "window": "2015-07 equity crash",
+    "product": "IF",
+    "rows": 23,
+    "first": "20150701",
+    "last": "20150731",
+    "min_close_chg": [
+     "20150708",
+     -10.0
+    ],
+    "max_close_chg": [
+     "20150709",
+     9.99
+    ],
+    "rolls_in_window": 1,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2015-07 equity crash",
+    "product": "IH",
+    "rows": 23,
+    "first": "20150701",
+    "last": "20150731",
+    "min_close_chg": [
+     "20150708",
+     -10.0
+    ],
+    "max_close_chg": [
+     "20150709",
+     9.99
+    ],
+    "rolls_in_window": 1,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2015-07 equity crash",
+    "product": "IC",
+    "rows": 23,
+    "first": "20150701",
+    "last": "20150731",
+    "min_close_chg": [
+     "20150707",
+     -10.0
+    ],
+    "max_close_chg": [
+     "20150710",
+     10.0
+    ],
+    "rolls_in_window": 1,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2016-11-14 black-sector crash",
+    "product": "rb",
+    "rows": 7,
+    "first": "20161110",
+    "last": "20161118",
+    "min_close_chg": [
+     "20161115",
+     -6.02
+    ],
+    "max_close_chg": [
+     "20161111",
+     3.48
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2016-11-14 black-sector crash",
+    "product": "hc",
+    "rows": 7,
+    "first": "20161110",
+    "last": "20161118",
+    "min_close_chg": [
+     "20161115",
+     -6.02
+    ],
+    "max_close_chg": [
+     "20161111",
+     2.65
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2016-11-14 black-sector crash",
+    "product": "i",
+    "rows": 7,
+    "first": "20161110",
+    "last": "20161118",
+    "min_close_chg": [
+     "20161116",
+     -6.48
+    ],
+    "max_close_chg": [
+     "20161110",
+     8.99
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "sina"
+    ]
+   },
+   {
+    "window": "2016-11-14 black-sector crash",
+    "product": "j",
+    "rows": 7,
+    "first": "20161110",
+    "last": "20161118",
+    "min_close_chg": [
+     "20161115",
+     -8.56
+    ],
+    "max_close_chg": [
+     "20161114",
+     3.14
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "sina"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "rb",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -8.02
+    ],
+    "max_close_chg": [
+     "20200204",
+     1.63
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "hc",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -8.02
+    ],
+    "max_close_chg": [
+     "20200204",
+     1.41
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "cu",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -6.48
+    ],
+    "max_close_chg": [
+     "20200204",
+     0.56
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "au",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200204",
+     -0.84
+    ],
+    "max_close_chg": [
+     "20200203",
+     2.67
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "i",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -7.97
+    ],
+    "max_close_chg": [
+     "20200204",
+     -2.56
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "sina"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "j",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -5.89
+    ],
+    "max_close_chg": [
+     "20200204",
+     0.94
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "sina"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "m",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -3.01
+    ],
+    "max_close_chg": [
+     "20200204",
+     3.07
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "sina"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "IF",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -10.0
+    ],
+    "max_close_chg": [
+     "20200204",
+     4.25
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "IH",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -9.68
+    ],
+    "max_close_chg": [
+     "20200204",
+     4.08
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "IC",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200203",
+     -10.0
+    ],
+    "max_close_chg": [
+     "20200204",
+     3.06
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2020-02-03 post-holiday limit-down",
+    "product": "T",
+    "rows": 2,
+    "first": "20200203",
+    "last": "20200204",
+    "min_close_chg": [
+     "20200204",
+     -0.24
+    ],
+    "max_close_chg": [
+     "20200203",
+     1.37
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2021-05 iron ore",
+    "product": "i",
+    "rows": 18,
+    "first": "20210506",
+    "last": "20210531",
+    "min_close_chg": [
+     "20210514",
+     -7.49
+    ],
+    "max_close_chg": [
+     "20210510",
+     10.0
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "sina"
+    ]
+   },
+   {
+    "window": "2021-05 iron ore",
+    "product": "rb",
+    "rows": 18,
+    "first": "20210506",
+    "last": "20210531",
+    "min_close_chg": [
+     "20210526",
+     -6.02
+    ],
+    "max_close_chg": [
+     "20210510",
+     5.99
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2021-05 iron ore",
+    "product": "hc",
+    "rows": 18,
+    "first": "20210506",
+    "last": "20210531",
+    "min_close_chg": [
+     "20210514",
+     -6.01
+    ],
+    "max_close_chg": [
+     "20210511",
+     6.88
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2021-10 coke",
+    "product": "j",
+    "rows": 16,
+    "first": "20211008",
+    "last": "20211029",
+    "min_close_chg": [
+     "20211028",
+     -12.0
+    ],
+    "max_close_chg": [
+     "20211018",
+     9.0
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "sina"
+    ]
+   },
+   {
+    "window": "2022-03 nickel squeeze (ni not tracked)",
+    "product": "cu",
+    "rows": 23,
+    "first": "20220301",
+    "last": "20220331",
+    "min_close_chg": [
+     "20220310",
+     -1.11
+    ],
+    "max_close_chg": [
+     "20220307",
+     3.08
+    ],
+    "rolls_in_window": 1,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2024-10-08 index limit-up open",
+    "product": "IF",
+    "rows": 7,
+    "first": "20240924",
+    "last": "20241009",
+    "min_close_chg": [
+     "20241009",
+     -8.0
+    ],
+    "max_close_chg": [
+     "20240930",
+     10.0
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2024-10-08 index limit-up open",
+    "product": "IH",
+    "rows": 7,
+    "first": "20240924",
+    "last": "20241009",
+    "min_close_chg": [
+     "20241009",
+     -7.6
+    ],
+    "max_close_chg": [
+     "20240930",
+     9.57
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2024-10-08 index limit-up open",
+    "product": "IC",
+    "rows": 7,
+    "first": "20240924",
+    "last": "20241009",
+    "min_close_chg": [
+     "20241009",
+     -5.1
+    ],
+    "max_close_chg": [
+     "20240927",
+     10.0
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   },
+   {
+    "window": "2024-10-08 index limit-up open",
+    "product": "IM",
+    "rows": 7,
+    "first": "20240924",
+    "last": "20241009",
+    "min_close_chg": [
+     "20241009",
+     -7.07
+    ],
+    "max_close_chg": [
+     "20240930",
+     10.0
+    ],
+    "rolls_in_window": 0,
+    "settle_sources": [
+     "exchange"
+    ]
+   }
+  ]
+ }
+}

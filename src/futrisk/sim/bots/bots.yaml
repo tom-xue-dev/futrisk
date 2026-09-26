@@ -1,0 +1,143 @@
+# strategy-sim bots (01 §3.1, §7.1). Packaged defaults - the same values are the code defaults
+# of futrisk/sim/bots/config.py and strategies.py. To override, put a bots.yaml into the active
+# config version (<home>/config/..., loaded as part of the committed config) or point
+# FUTRISK_BOTS_CONFIG at a file; FUTRISK_BOTS_AGGRESSIVE=1 (or --aggressive) switches ACC3 to the
+# breaker scenario mode. Ratios are decimals (docs README §3.4): 0.45 = 45% of equity.
+#
+# Default sizes keep every account inside risk_rules.yaml in normal operation (01 §8.14):
+#   product net notional < cap_util x (0.03 / limit_pct) of equity  (rb/hc 60%, i 50% -> 37.5% from
+#   2026-09-30, j 37.5%, IF/IC 30%, cu 42.9%, au 21.4%, m 50% -> 37.5%, T 150%), leverage << 3x.
+# Steady-state target books raise no WARN, with one documented exception: ACC4 at a strong signal
+# holds 2 lots of IF and IC (utilization ~0.88 of the 30% cap > the 0.7 product_exposure warn line).
+# ACC3 (the breaker demo account) runs a 0.78x-equity long black book, just under the 0.8 sector and
+# 0.7 rb product_exposure warn lines. During the breaker shock its ladder adds push it over both
+# lines: the product_exposure / sector_exposure WARNs come first - the position dimension of the
+# demo (task.md 盘中风控: 资金维度 + 持仓维度) - and the daily-loss warn / restrict / halt levels follow,
+# one per scenario leg (config/scenarios/breaker.yaml).
+
+identity: strategy-sim      # DEALER identity, whitelisted for order.* (02 §4.11)
+order_tag: strategy-sim/bots  # marker in the own client_order_ids (low 16 bits of the UUIDv7)
+seed: 20260928              # per-account RNG = Random("{seed}:{account}")
+aggressive: false
+status_log_s: 60            # periodic bot.status log line per account
+resync_interval_s: 300      # idle risk.query.accounts refresh: positions, equity, state (0 = off)
+ready_timeout_s: 60         # start trading after this long even if a shard is not RUNNING yet
+startup_cancel_own: true    # cancel the OWN working orders a previous incarnation left (one by one;
+                            # manual / liquidation orders are never touched; no order.cancel_all)
+startup_sync: true          # seed positions (with the snapshot time), equity, state from the shard
+shutdown_cancel_own: true   # cancel the own working orders on a clean stop
+snapshot_resync: true       # re-seed an idle account's positions from risk.snapshot when they differ
+drift_confirm: 2            # ... for this many consecutive snapshots
+
+execution:                  # defaults for every account (per-account "execution" merges on top)
+  max_orders_per_min: 6     # token bucket on market time: "a few orders per minute"
+  burst: 3
+  order_ttl_s: 20           # cancel own working orders older than this
+  aggression_ticks: [1, 2]  # marketable limits cross the spread by 1 or 2 ticks (RNG)
+  passive_prob: 0.2         # share of opening orders that join the book instead
+  slice_notional: 1500000   # max notional per order
+  max_slice_lots: 50
+  deadband_frac: 0.1        # skip rebalances < 10% of the target
+  probe_qty: 1              # first opening order after an account/product block expired
+  in_doubt_resubmit_s: 2    # TIMEOUT/UNAVAILABLE after retries: resend with the same client_order_id
+  in_doubt_giveup_s: 15
+  cancel_retry_s: 5
+  halt_probe_s: 20          # while HALTED: one 1-lot opening probe per 20 s (REJECT_ACCOUNT_HALTED shows)
+
+gates:                      # back-off after rejects (market time; doubled per repeat up to the max)
+  halt_backoff_s: 30        # REJECT_ACCOUNT_HALTED / kill switch -> opening probe interval
+  halt_backoff_max_s: 120
+  block_backoff_s: 20       # blocked account/product, add-to-loser, exposure cap, what-if, funds
+  block_backoff_max_s: 300
+  transport_backoff_s: 3    # TIMEOUT/UNAVAILABLE/BUSY/RISK_BUSY after the client retries
+  transport_backoff_max_s: 60
+  size_restore_s: 120       # ORDER_SIZE_FACTOR: full size again after this quiet time
+
+accounts:
+  ACC1:                     # 黑色系通道突破 (10M)
+    strategy: channel_breakout
+    params:
+      instruments: [rb2701, hc2701, i2701, j2701]
+      bar_s: 20             # bar length (market time; demo scale: warm after ~7 minutes)
+      entry_n: 20           # breakout of the 20-bar high/low
+      exit_n: 10            # exit on the opposite 10-bar channel
+      notional_frac: 0.12   # 12% of equity per product -> 48% black sector at most
+      cap_util: 0.85
+      allow_short: true
+
+  ACC2:                     # 多品种趋势 (20M)
+    strategy: multi_trend
+    params:
+      instruments: [rb2701, cu2611, au2612, m2701, IF2612, T2612]
+      bar_s: 30
+      fast: 8               # SMA(8) vs SMA(24) of bar closes
+      slow: 24
+      band: 0.0005          # relative gap needed to flip
+      notional_frac: 0.10   # 10% of equity per product (IF/T/au: 1-2 lots)
+      cap_util: 0.85
+
+  ACC3:                     # 日内逆势加仓 (10M) - the circuit-breaker demo account (01 §6.3, QS-03)
+    strategy: counter_trend_add
+    params:
+      weights: {rb2701: 0.39, hc2701: 0.17, i2701: 0.22}   # long book = 0.78 x equity (below the 0.8 sector warn line before the shock)
+      build_s: 300          # ramp the book over 5 minutes of market time ...
+      build_steps: 5        # ... in 5 steps (first step at once)
+      warmup_ticks: 3
+      dip_step: 0.005       # one ladder level per 0.5% below the reference price,
+      add_frac: 0.0625      # each adding 6.25% of the base lots,
+      max_adds: 8           # down to -4%: +50% in total, spread over the whole breaker shock
+      cap_util: 0.9         # rb/hc <= 54% of equity, i <= 45% (33.75% from 2026-09-30)
+      sector_cap: 1.1       # black-sector net notional <= 1.1 x equity (block line 1.2)
+      complete_ratio: 0.9   # ladder arms once every product holds 90% of its base
+      realloc_blocked: true # a product blocked by structure gives its budget to the others
+      realloc_after_strikes: 2
+      halt_trim_delay_s: 30 # once HALTED (latched by then): trim 10% of each position, once;
+      halt_trim_frac: 0.10  # the trimmed book stays the ceiling until the day roll
+      aggressive: false
+    execution:
+      max_orders_per_min: 8
+      burst: 4
+      passive_prob: 0.0
+      deadband_frac: 0.05   # build the book to >= 95% of the target
+    aggressive:             # FUTRISK_BOTS_AGGRESSIVE=1 / --aggressive: whole book at once
+      params:
+        aggressive: true
+      execution:
+        max_orders_per_min: 60
+        burst: 20
+        slice_notional: 3000000
+        max_slice_lots: 100
+        order_ttl_s: 10
+        passive_prob: 0.0
+
+  ACC4:                     # 股指杠杆方向 (10M)
+    strategy: index_directional
+    params:
+      weights: {IF2612: 0.5, IC2612: 0.5}
+      bar_s: 10             # warm after ~3 minutes
+      fast: 6
+      slow: 20
+      band: 0.0003
+      leverage_min: 0.3     # leverage target scales with the momentum strength, within the
+      leverage_max: 0.55    # IF/IC product caps (30% of equity each = 3% / 10% limit move, 01 §8.14);
+                            # at a strong signal 2 lots each = utilization ~0.88: a product_exposure
+                            # WARN (alert only) - the documented exception of the steady-state books
+      strength_scale: 0.002
+      leverage_step: 0.05
+      cap_util: 0.9
+      respect_product_cap: true
+
+  ACC5:                     # 螺纹跨期套利 (5M)
+    strategy: rb_calendar_spread
+    params:
+      near: rb2701
+      far: rb2705
+      sample_s: 5           # spread sample every 5 s of market time
+      window: 60            # z-score over the last 60 samples (5 minutes)
+      min_samples: 12
+      entry_z: 1.5
+      exit_z: 0.3
+      base_lots: 20         # two-sided book always held: SHFE single-side (big-side) margin
+      step_lots: 10
+      max_lots: 60
+      default_side: 1       # start long rb2701 / short rb2705

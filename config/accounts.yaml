@@ -1,0 +1,33 @@
+# Strategy accounts and shard ownership (01 §7.1).
+# risk-engine-0 (coordinator): ACC1, ACC2; risk-engine-1: ACC3, ACC4, ACC5.
+accounts:
+  ACC1:
+    name: 黑色系通道突破
+    shard: 0
+    initial_capital: "10000000"
+    strategy: channel_breakout
+    products: [rb, hc, i, j]
+  ACC2:
+    name: 多品种趋势
+    shard: 0
+    initial_capital: "20000000"
+    strategy: multi_trend
+    products: [rb, cu, au, m, IF, T]
+  ACC3:
+    name: 日内逆势加仓
+    shard: 1
+    initial_capital: "10000000"
+    strategy: counter_trend_add
+    products: [rb, hc, i]
+  ACC4:
+    name: 股指杠杆方向
+    shard: 1
+    initial_capital: "10000000"
+    strategy: index_directional
+    products: [IF, IC]
+  ACC5:
+    name: 螺纹跨期套利
+    shard: 1
+    initial_capital: "5000000"
+    strategy: rb_calendar_spread
+    products: [rb]

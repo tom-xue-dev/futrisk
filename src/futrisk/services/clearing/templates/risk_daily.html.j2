@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>风控日报 {{ b.trading_day }}</title>
+<style>
+  :root { --fg:#1d2330; --muted:#5f6b7a; --line:#d9dee6; --bg:#ffffff; --band:#f4f6f9; --pos:#b3261e; --neg:#1e7b3a; --accent:#2a6fb0; --warn:#b8741a; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 28px 48px; font:13px/1.5 "Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif; color:var(--fg); background:var(--bg); }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:28px 0 10px; padding-bottom:4px; border-bottom:2px solid var(--accent); }
+  h3 { font-size:13px; margin:16px 0 6px; color:var(--muted); }
+  .sub { color:var(--muted); margin-bottom:12px; }
+  table { border-collapse:collapse; width:100%; margin:4px 0 10px; }
+  th, td { border:1px solid var(--line); padding:3px 6px; text-align:right; white-space:nowrap; }
+  th { background:var(--band); font-weight:600; }
+  td.l, th.l { text-align:left; }
+  tr.total td { font-weight:600; background:var(--band); }
+  .pos { color:var(--pos); } .neg { color:var(--neg); }
+  .note { color:var(--warn); background:#fff8ec; border-left:3px solid var(--warn); padding:4px 8px; margin:6px 0; }
+  .tiles { display:flex; flex-wrap:wrap; gap:10px; margin:6px 0 10px; }
+  .tile { flex:1 1 150px; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:var(--band); }
+  .tile .k { color:var(--muted); font-size:12px; } .tile .v { font-size:18px; font-weight:600; }
+  ul.sent { margin:6px 0 0 18px; padding:0; } ul.sent li { margin:2px 0; }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:2px 14px; }
+  .kv div:nth-child(odd) { color:var(--muted); }
+  .chart { max-width:100%; border:1px solid var(--line); padding:4px; }
+  .small { font-size:11px; color:var(--muted); }
+  code { font-family:Consolas,monospace; font-size:12px; }
+  @media print {
+    body { padding:0; font-size:11px; }
+    h2 { break-after:avoid; }
+    section { break-inside:avoid-page; }
+    .chart { max-height:90vh; }
+    a { color:inherit; text-decoration:none; }
+  }
+</style>
+</head>
+<body>
+{% macro cls(x) %}{% if x is not none and x > 0 %}pos{% elif x is not none and x < 0 %}neg{% endif %}{% endmacro %}
+<h1>futrisk 风控日报 · {{ header.trading_day }}</h1>
+<div class="sub">结算版本 v{{ header.version }} · 生成于 {{ header.generated }} · 下一交易日 {{ header.next_trading_day }}</div>
+
+<section id="sec-header">
+<h2>1 {{ titles[0] }}</h2>
+<div class="kv">
+  <div>交易日</div><div>{{ header.trading_day }}，{{ header.session }}</div>
+  <div>结算版本</div><div>v{{ header.version }}（触发：{{ header.triggered_by }}）</div>
+  <div>配置</div><div>版本 {{ header.config_version }} · 哈希 <code title="{{ header.config_hash }}">{{ header.config_hash[:16] }}</code></div>
+  <div>结算价来源</div><div>{% for k, v in price_sources.items() %}{{ k }} {{ v }} 个{% if not loop.last %}，{% endif %}{% else %}—{% endfor %}</div>
+  <div>流程时刻</div><div>{% for k, v in header.phases.items() %}{{ k }} {{ v[11:] }}{% if not loop.last %} → {% endif %}{% endfor %}</div>
+</div>
+<h3>各合约结算价</h3>
+<table>
+  <tr><th class="l">合约</th><th class="l">交易所</th><th>结算价</th><th class="l">来源</th><th class="l">方法</th><th>未取整 VWAP</th><th class="l">输入质量</th><th class="l">人工说明</th></tr>
+  {% for p in prices %}
+  <tr><td class="l">{{ p.instrument_id }}</td><td class="l">{{ p.exchange }}</td><td>{{ p.price }}</td><td class="l">{{ p.source }}</td><td class="l">{{ p.method }}</td><td>{{ p.vwap_raw }}</td><td class="l">{{ p.quality }}</td><td class="l">{{ p.note }}</td></tr>
+  {% endfor %}
+</table>
+<div class="small" id="price-rules">结算价优先级：人工覆盖（MANUAL）＞ 官方结算价（OFFICIAL）＞ 成交量加权平均价（VWAP，按交易所规则取整）＞ 回退链；回退时的昨结算价以本系统日初快照为准（行情网关给出的昨结算不同时记 WARN）。
+上期所、大商所按全天 VWAP；当日无成交时依次取：买一、卖一与昨结算三者的中位数（FALLBACK_MEDIAN）→ 涨跌停封板价（FALLBACK_LIMIT）→ 昨结算（PRE_SETTLE）。
+中金所按最后一小时 VWAP；最后一小时无成交时依次取：往前逐小时的 VWAP（最后一笔成交距开盘不足一小时则取全天 VWAP，FALLBACK_HOURLY / FALLBACK_FULLDAY）→ 全天 VWAP（FALLBACK_FULLDAY）→ 基准合约推算（FALLBACK_BENCHMARK，中金所结算细则第四十三条：基准合约为同品种当日有成交、离交割月最近的合约；把它的结算价相对其昨结算的变动点数加到本合约昨结算上，并限制在本合约涨跌停价内；同品种当日均无成交时跳过此步）→ 昨结算（PRE_SETTLE）。</div>
+</section>
+
+<section id="sec-summary">
+<h2>2 {{ titles[1] }}</h2>
+<div class="tiles">
+  <div class="tile"><div class="k">公司权益</div><div class="v">{{ m.money(total.equity) }}</div></div>
+  <div class="tile"><div class="k">当日盈亏</div><div class="v {{ cls(total.day_pnl) }}">{{ m.money(total.day_pnl, signed=True) }}</div><div class="small">占初始资金 {{ m.pct(day_pnl_pct, signed=True) }}</div></div>
+  <div class="tile"><div class="k">保证金占用</div><div class="v">{{ m.money(total.margin) }}</div></div>
+  <div class="tile"><div class="k">风险度</div><div class="v">{{ m.pct(total.risk_degree) }}</div></div>
+  <div class="tile"><div class="k">对账检查</div><div class="v">{% for k, v in check_counts.items() %}{{ k }} {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}</div></div>
+</div>
+<h3>要点</h3>
+<ul class="sent">
+  {% for s in sentences %}<li>{{ s }}</li>{% endfor %}
+</ul>
+{% if b.alerts_error or b.orders_error %}<p class="note">事件数据不完整：{{ b.alerts_error or '' }} {{ b.orders_error or '' }}</p>{% endif %}
+{% if checks %}
+<h3>非 PASS 的对账项</h3>
+<table>
+  <tr><th class="l">检查项</th><th class="l">结果</th><th class="l">账户</th><th class="l">明细</th></tr>
+  {% for c in checks %}<tr><td class="l">{{ c.check.value }}</td><td class="l">{{ c.status.value }}</td><td class="l">{{ c.account_id or '公司' }}</td><td class="l small">{{ (c.detail or {}) | tojson }}</td></tr>{% endfor %}
+</table>
+{% endif %}
+</section>
+
+<section id="sec-funds">
+<h2>3 {{ titles[2] }}</h2>
+<table>
+  <tr><th class="l">账户</th><th class="l">名称</th><th>上日结存</th><th>出入金</th><th>平仓盈亏</th><th>盯市盈亏</th><th>手续费</th><th>客户权益</th><th>保证金</th><th>可用资金</th><th>风险度</th><th>净值</th><th title="当前回撤（距高水位）">距高水位回撤</th><th>历史最大回撤</th></tr>
+  {% for f in funds + [total] %}
+  <tr{% if loop.last %} class="total"{% endif %}>
+    <td class="l">{{ f.account_id }}</td><td class="l">{{ f.name }}</td>
+    <td>{{ m.money(f.pre_balance) }}</td><td>{{ m.money(f.net_deposit) }}</td>
+    <td class="{{ cls(f.close_pnl) }}">{{ m.money(f.close_pnl) }}</td><td class="{{ cls(f.position_pnl) }}">{{ m.money(f.position_pnl) }}</td>
+    <td>{{ m.money(f.fee) }}</td><td>{{ m.money(f.equity) }}</td><td>{{ m.money(f.margin) }}</td><td>{{ m.money(f.available) }}</td>
+    <td>{{ m.pct(f.risk_degree) }}</td><td>{{ m.num(f.nav, 4) if f.nav is not none else '—' }}</td><td>{{ m.pct(f.max_drawdown) if f.max_drawdown is not none else '—' }}</td>
+    <td>{{ m.pct(f.peak_drawdown) if f.peak_drawdown is not none else '—' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<div class="small">客户权益 = 上日结存 + 出入金 + 平仓盈亏 + 盯市盈亏 − 手续费；可用资金 = 权益 − 保证金；风险度 = 保证金 ÷ 权益；净值 = (权益 − 累计净入金) ÷ 初始资金（01 §8.15）；距高水位回撤 = 当前业绩权益距历史最高业绩权益（高水位）的回撤（即结算表 max_drawdown 字段的含义）；历史最大回撤 = 自首个结算日以来各日距高水位回撤的最大值（按每日结算计，不含盘中）。</div>
+</section>
+
+<section id="sec-pnl">
+<h2>4 {{ titles[3] }}</h2>
+<h3>按账户 × 品种的当日盈亏（平仓 + 盯市 − 手续费）</h3>
+<table>
+  <tr><th class="l">账户</th>{% for p in products %}<th>{{ p }}</th>{% endfor %}<th>合计</th></tr>
+  {% for f in funds %}
+  {% set row = pnl_prod.get(f.account_id, {}) %}
+  <tr><td class="l">{{ f.account_id }}</td>{% for p in products %}{% set v = row.get(p) %}<td class="{{ cls(v) }}">{{ m.money(v) if v is not none else '' }}</td>{% endfor %}<td class="{{ cls(f.day_pnl) }}">{{ m.money(f.day_pnl) }}</td></tr>
+  {% endfor %}
+  <tr class="total"><td class="l">合计</td>{% for p in products %}<td>{{ m.money(prod_totals[p]) }}</td>{% endfor %}<td>{{ m.money(total.day_pnl) }}</td></tr>
+</table>
+<h3>按板块</h3>
+<table>
+  <tr><th class="l">账户</th>{% for s in sectors %}<th>{{ s }}</th>{% endfor %}</tr>
+  {% for f in funds %}{% set row = pnl_sector.get(f.account_id, {}) %}
+  <tr><td class="l">{{ f.account_id }}</td>{% for s in sectors %}{% set v = row.get(s) %}<td class="{{ cls(v) }}">{{ m.money(v) if v is not none else '' }}</td>{% endfor %}</tr>
+  {% endfor %}
+  <tr class="total"><td class="l">合计</td>{% for s in sectors %}<td>{{ m.money(sector_totals[s]) }}</td>{% endfor %}</tr>
+</table>
+<h3>敞口与集中度（按结算价计的名义价值）</h3>
+<table>
+  <tr><th class="l">账户</th><th>总敞口</th><th>净敞口</th><th>杠杆</th><th>有效品种数</th><th>涨跌停压力</th><th class="l">前 5 品种（净名义 / 占权益）</th><th class="l">最大板块集中度</th></tr>
+  {% for e in exposures %}
+  <tr><td class="l">{{ e.account_id }}</td><td>{{ m.money(e.gross) }}</td><td class="{{ cls(e.net) }}">{{ m.money(e.net) }}</td>
+    <td>{{ m.num(e.leverage, 2) if e.leverage is not none else '—' }}</td><td>{{ m.num(e.effective_n, 2) if e.effective_n is not none else '—' }}</td>
+    <td>{{ m.pct(e.limit_stress) }}</td>
+    <td class="l">{% for prod, v, share in e.top5 %}{{ prod }} {{ m.money(v) }}（{{ m.pct(share, 1) }}）{% if not loop.last %}；{% endif %}{% else %}—{% endfor %}</td>
+    <td class="l">{% if e.top_sector_share %}{{ e.top_sector_share[0] }} {{ m.pct(e.top_sector_share[1], 1) }}{% else %}—{% endif %}</td></tr>
+  {% endfor %}
+</table>
+<h3>跨账户品种网格（带符号净名义，含公司净额）</h3>
+<table>
+  <tr><th class="l">品种</th>{% for e in exposures %}<th>{{ e.account_id }}</th>{% endfor %}<th>公司净额</th></tr>
+  {% for r in grid_rows %}
+  <tr><td class="l">{{ r.product }} {{ r.name }}</td>{% for e in exposures %}{% set v = r.cells.get(e.account_id) %}<td class="{{ cls(v) }}">{{ m.money(v) if v is not none else '' }}</td>{% endfor %}<td class="{{ cls(r.firm) }}">{{ m.money(r.firm) }}</td></tr>
+  {% else %}<tr><td class="l" colspan="{{ exposures|length + 2 }}">日终无持仓</td></tr>{% endfor %}
+</table>
+<h3>保证金分组（单向大边）</h3>
+<table>
+  <tr><th class="l">账户</th><th class="l">分组</th><th class="l">方法</th><th>多头保证金</th><th>空头保证金</th><th>已退出部分</th><th>实收保证金</th></tr>
+  {% for g in margin_groups %}<tr><td class="l">{{ g.account_id }}</td><td class="l">{{ g.margin_group }}</td><td class="l">{{ g.method }}</td><td>{{ m.money(g.long_margin) }}</td><td>{{ m.money(g.short_margin) }}</td><td>{{ m.money(g.excluded_margin) }}</td><td>{{ m.money(g.charged_margin) }}</td></tr>
+  {% else %}<tr><td class="l" colspan="7">无</td></tr>{% endfor %}
+</table>
+</section>
+
+<section id="sec-limits">
+<h2>5 {{ titles[4] }}</h2>
+{% if b.metrics_error %}<p class="note">盘中峰值不可用：{{ b.metrics_error }}</p>{% endif %}
+<table>
+  <tr><th class="l">账户</th><th class="l">规则</th><th class="l">指标</th><th>日终值</th><th>硬限额（级别）</th><th>日终使用率</th><th>盘中峰值</th><th>峰值使用率</th><th>突破次数</th></tr>
+  {% for r in limits %}
+  <tr><td class="l">{{ r.account_id }}</td><td class="l">{{ r.rule_id }}</td><td class="l">{{ r.metric }} {{ r.op }}</td>
+    <td>{% if r.eod_value is none %}—{% elif r.fmt == 'pct' %}{{ m.pct(r.eod_value) }}{% else %}{{ m.num(r.eod_value, 3) }}{% endif %}</td>
+    <td>{% if r.fmt == 'pct' %}{{ m.pct(r.threshold) }}{% else %}{{ r.threshold }}{% endif %}（{{ r.level }}）</td>
+    <td>{{ m.pct(r.utilization, 1) }}</td>
+    <td>{% if r.peak_value is none %}—{% elif r.fmt == 'pct' %}{{ m.pct(r.peak_value) }}{% else %}{{ m.num(r.peak_value, 3) }}{% endif %}</td>
+    <td>{{ m.pct(r.peak_util, 1) }}</td><td>{{ r.breaches }}</td></tr>
+  {% endfor %}
+</table>
+<div class="small">使用率 = 数值 ÷ 硬限额（该规则的熔断级；没有熔断级时取最严的限制级），与仪表盘和风控引擎（RuleStatus.hard_utilization）同一口径；亏损类以 0、单位净值以 1 为基准，100% 即到达硬限额。峰值使用率取盘中指标采样的最大值。突破次数为当日该规则的 ALERT_RAISED 事件数（risk.query.alerts）。</div>
+</section>
+
+<section id="sec-events">
+<h2>6 {{ titles[5] }}</h2>
+{% if b.alerts_error %}<p class="note">风险事件不可用：{{ b.alerts_error }}</p>{% endif %}
+<h3>告警、熔断、重置与控制</h3>
+<table>
+  <tr><th class="l">时间</th><th class="l">账户</th><th class="l">类别</th><th class="l">规则 / 级别</th><th class="l">动作</th><th>当时值</th><th>阈值</th><th class="l">说明</th></tr>
+  {% for e in events %}
+  <tr><td class="l">{{ m.hms(e.ts_ns) }}</td><td class="l">{{ e.account_id or '公司' }}</td><td class="l">{{ e.kind.value }}</td><td class="l">{{ e.rule_id or '' }}{% if e.level %}/{{ e.level }}{% endif %}</td><td class="l">{{ e.action.value if e.action else '' }}</td><td>{{ m.num(e.value, 4) if e.value is not none else '' }}</td><td>{{ m.num(e.threshold, 4) if e.threshold is not none else '' }}</td><td class="l">{{ e.message }}</td></tr>
+  {% else %}<tr><td class="l" colspan="8">当日无风险事件</td></tr>{% endfor %}
+</table>
+<h3>被拒委托</h3>
+{% if b.orders_error %}<p class="note">委托流水不可用：{{ b.orders_error }}</p>{% endif %}
+<table>
+  <tr><th class="l">时间</th><th class="l">账户</th><th class="l">合约</th><th class="l">方向</th><th class="l">开平</th><th>手数</th><th>价格</th><th class="l">状态</th><th class="l">原因码</th></tr>
+  {% for o in rejected %}
+  <tr><td class="l">{{ m.hms(o.created_ns) }}</td><td class="l">{{ o.account_id }}</td><td class="l">{{ o.instrument_id }}</td><td class="l">{{ o.direction.value }}</td><td class="l">{{ o.offset.value }}</td><td>{{ o.qty }}</td><td>{{ o.price if o.price is not none else '市价' }}</td><td class="l">{{ o.status.value }}</td><td class="l">{{ o.reject_code or '' }}</td></tr>
+  {% else %}<tr><td class="l" colspan="9">当日无被拒委托</td></tr>{% endfor %}
+</table>
+</section>
+
+<section id="sec-dq">
+<h2>7 {{ titles[6] }}</h2>
+{% if b.md_error %}<p class="note">行情事件不可用：{{ b.md_error }}</p>{% endif %}
+<table>
+  <tr><th class="l">数据源</th><th>可用率（估算）</th><th>中断次数</th><th>补数条数</th><th>无法恢复</th><th>坏点数</th><th>事件数</th></tr>
+  {% for r in dq.sources %}
+  <tr><td class="l">{{ r.source }}</td><td>{{ m.pct(r.availability) }}</td><td>{{ r.outages }}</td><td>{{ r.filled }}</td><td>{{ r.unrecoverable }}</td><td>{{ r.bad_ticks }}</td><td>{{ r.events }}</td></tr>
+  {% else %}<tr><td class="l" colspan="7">当日无行情事件（各源全程可信）</td></tr>{% endfor %}
+</table>
+<div class="small">{% if dq.kinds %}事件分布：{% for k, v in dq.kinds.items() %}{{ k }} {{ v }}{% if not loop.last %}，{% endif %}{% endfor %}。{% endif %}可用率为估算值：在交易日首开至末收的时间窗内，扣除数据源处于 EXCLUDED 状态的时长（依据 md.events 的状态变化），不是逐笔统计。</div>
+</section>
+
+<section id="sec-system">
+<h2>8 {{ titles[7] }}</h2>
+{% if b.svc_error %}<p class="note">服务事件不可用：{{ b.svc_error }}</p>{% endif %}
+<table>
+  <tr><th class="l">实例</th><th>重启次数</th><th>退出次数</th><th>可用率（估算）</th><th>事件数</th></tr>
+  {% for r in system %}
+  <tr><td class="l">{{ r.instance }}</td><td>{{ r.restarts }}</td><td>{{ r.exits }}</td><td>{{ m.pct(r.availability) }}</td><td>{{ r.events }}</td></tr>
+  {% else %}<tr><td class="l" colspan="5">当日无进程事件</td></tr>{% endfor %}
+</table>
+<div class="small">可用率为估算值：在交易日首开至末收的时间窗内，扣除进程处于 EXITED / RESTARTING / FAILED / STOPPED 的时长（依据 supervisor svc.history 的状态变化），不反映心跳层面的降级。</div>
+{% if svc_events %}
+<table>
+  <tr><th class="l">时间</th><th class="l">实例</th><th class="l">状态</th><th class="l">原因</th><th>退出码</th></tr>
+  {% for e in svc_events %}<tr><td class="l">{{ m.hms(e.ts_ns) }}</td><td class="l">{{ e.instance }}</td><td class="l">{{ e.from_state.value }} → {{ e.to_state.value }}</td><td class="l">{{ e.reason.value }}</td><td>{{ e.exit_code if e.exit_code is not none else '' }}</td></tr>{% endfor %}
+</table>
+{% endif %}
+</section>
+
+<section id="sec-charts">
+<h2>9 {{ titles[8] }}</h2>
+<h3>盘中小多图：当日盈亏 / 初始资金（虚线为熔断线）</h3>
+{% if chart_intraday %}<img class="chart" alt="intraday" src="{{ chart_intraday }}">{% else %}<p class="note">无盘中指标样本{% if b.metrics_error %}（{{ b.metrics_error }}）{% endif %}</p>{% endif %}
+<h3>近 60 个交易日净值与距高水位回撤</h3>
+{% if chart_nav %}<img class="chart" alt="nav" src="{{ chart_nav }}">{% else %}<p class="note">无历史结算数据</p>{% endif %}
+</section>
+
+<section id="sec-stress">
+<h2>10 {{ titles[9] }}</h2>
+<table>
+  <tr><th class="l">板块</th><th>冲击</th>{% for f in funds %}<th>{{ f.account_id }}</th>{% endfor %}<th>公司</th><th>占公司权益</th></tr>
+  {% for r in stress %}
+  <tr><td class="l">{{ r.sector }}</td><td>{{ m.pct(r.shock, 0, signed=True) }}</td>{% for f in funds %}{% set v = r.accounts.get(f.account_id) %}<td class="{{ cls(v) }}">{{ m.money(v) }}</td>{% endfor %}<td class="{{ cls(r.firm) }}">{{ m.money(r.firm) }}</td><td>{{ m.pct(r.pct_equity) }}</td></tr>
+  {% else %}<tr><td class="l" colspan="{{ funds|length + 4 }}">日终无持仓，无需压力测试</td></tr>{% endfor %}
+</table>
+<div class="small">冲击按日终持仓的结算价名义价值乘以板块统一涨跌幅计算，不含相关性与流动性折扣（SHOULD 项）。</div>
+</section>
+
+<p class="small">futrisk clearing-worker · {{ b.trading_day }} v{{ b.version }} · 数据来源：clearing.db 结算结果，risk.query.alerts / orders / metrics，md.events，svc.history（01 §5.3.4）。</p>
+</body>
+</html>

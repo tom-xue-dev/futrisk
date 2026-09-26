@@ -1,0 +1,18 @@
+# Build context of deploy/Dockerfile = the repository root (BuildKit uses this file instead
+# of a .dockerignore at the root). Everything is excluded except the build inputs.
+*
+!pyproject.toml
+!poetry.lock
+!README.md
+!src/
+!config/
+!data/hist/
+!web/
+
+# re-excluded inside the inputs
+**/__pycache__
+**/*.pyc
+web/node_modules
+web/dist
+# built in the image by the `web` stage
+src/futrisk/web_static/dist

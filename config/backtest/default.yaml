@@ -1,0 +1,95 @@
+# Paired experiment on the daily-loss rule (01 §8.16, plan §7.1): layer A, 2015 to the latest data day.
+#
+# Every arm replays the same daily bars (intraday paths synthesized, official settlement prices) with the same
+# strategies and seed, through the production EngineCore and settle_day; only the rules differ:
+#   no_rules         no rule at all (run in the deterministic variants; alert_only is the ensemble's baseline)
+#   alert_only       the daily-loss ladder as alerts only: trades exactly like no_rules (TP/FP counterfactual)
+#   block_open       the production rule = restrict (-2.5%: order size x0.5, no adding to losers) + circuit break
+#                    (-3%: opens rejected); warn -2%, derisk -5% (plan only)
+#   halt_only        the circuit break alone (restrict is only an alert): block_open - halt_only = the restrict part
+#   halve / flatten  block_open + close 50% / 100% of every position when the breaker latches (backtest action, TD-08)
+#   placebo_halt     no rule; halt_only's action (a manual halt for the rest of the day) on random days without a
+#                    trigger, as many as halt_only latched, at the same times of day
+#   placebo_flatten  the same for flatten (manual halt + close everything)
+# ACC3B is a control: ACC3's strategy without the intraday ladder (max_adds 0), reported apart from TOTAL.
+#
+# The main result replays K = ensemble.paths realizations of the calibrated stochastic path model
+# (futrisk.backtest.pathmodel; calibrated on the layer B minute bars); the sensitivity variants replay the
+# deterministic paths (open-near-extreme / high first / low first) and compare layer B with layer A on the
+# minute window. Everything is reported as model-conditional.
+# Run: futrisk backtest run default [--set ensemble.paths=4] [--set start=20210101] [--out DIR]
+name: default
+description: >-
+  日亏熔断规则的配对实验（A 层日线 2015 年至今、随机日内路径集合、官方结算价）：基线对比 限制+熔断（生产）/ 仅熔断 /
+  熔断+减半 / 熔断+清仓，外加安慰剂与去掉加仓的 ACC3 对照；路径敏感性与 B 层分钟线对照另列。
+kind: arms
+layer: A
+start: "20150105"
+end: null
+products: [rb, hc, cu, au, i, j, m, IF, IH, IC, IM, T]
+accounts:
+  ACC1: {strategy: channel_breakout}
+  ACC2: {strategy: multi_trend}
+  ACC3: {strategy: counter_trend_add}
+  ACC4: {strategy: index_directional}
+  ACC5: {strategy: rb_calendar_spread}
+  ACC3B: {strategy: counter_trend_add, params: {max_adds: 0}, capital: 10000000, role: control, title: ACC3 无加仓对照}
+arms:
+  - {name: no_rules, tier: none}
+  - {name: alert_only, tier: alert_only}
+  - {name: block_open, tier: block_open}
+  - {name: halt_only, tier: halt_only}
+  - {name: halve, tier: halve}
+  - {name: flatten, tier: flatten}
+  - {name: placebo_halt, tier: placebo, placebo_of: halt_only}
+  - {name: placebo_flatten, tier: placebo, placebo_of: flatten}
+rules:
+  threshold: 0.03
+path:
+  rule: open_near_extreme
+ensemble:
+  paths: 20
+sensitivity:
+  - {name: open_near_extreme, title: 确定性·开盘近端先到（同步）, set: {path.rule: open_near_extreme}}
+  - {name: high_first, title: 确定性·先高后低（同步）, set: {path.rule: high_first}}
+  - {name: low_first, title: 确定性·先低后高（同步）, set: {path.rule: low_first}}
+  - {name: ensemble_sync, title: 集合·同板块完全同步 (ρ=0.95), set: {ensemble.rho: 0.95}, paths: 10,
+     arms: [alert_only, block_open, halt_only, halve, flatten]}
+  - {name: ensemble_no_wiggle, title: 集合·无振荡 (σ=0), set: {ensemble.sigma: 0.0}, paths: 10,
+     arms: [alert_only, block_open, halt_only, halve, flatten]}
+  - {name: B60_window_B, title: B窗口·B层新浪60分钟线, set: {layer: B, start: null, end: null, data.minute_period: 60,
+     products: [rb, hc, i, j, m, IF, IH, IC, IM, T], accounts.ACC2.products: [rb, m, IF, T], warmup_days: 80}}
+  - {name: B60_window_A_det, title: B窗口·A层确定性, set: {start: null, end: null, data.minute_window: 60,
+     products: [rb, hc, i, j, m, IF, IH, IC, IM, T], accounts.ACC2.products: [rb, m, IF, T], warmup_days: 80}}
+  - {name: B60_window_A_ens, title: B窗口·A层随机路径集合, set: {start: null, end: null, data.minute_window: 60,
+     products: [rb, hc, i, j, m, IF, IH, IC, IM, T], accounts.ACC2.products: [rb, m, IF, T], warmup_days: 80}, paths: 20}
+  - {name: B60_window_B_t15, title: B窗口·B层60分钟线·阈值1.5%, set: {layer: B, start: null, end: null, data.minute_period: 60,
+     rules.threshold: 0.015, products: [rb, hc, i, j, m, IF, IH, IC, IM, T], accounts.ACC2.products: [rb, m, IF, T],
+     warmup_days: 80}}
+  - {name: B60_window_A_ens_t15, title: B窗口·A层随机路径集合·阈值1.5%, set: {start: null, end: null, data.minute_window: 60,
+     rules.threshold: 0.015, products: [rb, hc, i, j, m, IF, IH, IC, IM, T], accounts.ACC2.products: [rb, m, IF, T],
+     warmup_days: 80}, paths: 20}
+  - {name: B15_window_B, title: B窗口·B层新浪15分钟线, set: {layer: B, start: null, end: null, data.minute_period: 15,
+     products: [rb, hc, i, j, m, IF, IH, IC, IM, T], accounts.ACC2.products: [rb, m, IF, T], warmup_days: 80}}
+  - {name: B15_window_A_ens, title: B15窗口·A层随机路径集合, set: {start: null, end: null, data.minute_window: 15,
+     products: [rb, hc, i, j, m, IF, IH, IC, IM, T], accounts.ACC2.products: [rb, m, IF, T], warmup_days: 80}, paths: 20}
+analysis:
+  horizons: [0, 1, 5]
+  bootstrap_samples: 1000
+  bootstrap_block: 20
+  primary_basis: close
+  primary_horizon: 1
+  focus_days: ["20150708", "20161114", "20161115", "20200203", "20210513", "20211021", "20241008"]
+  intraday_trigger_days: 40
+# the stress windows are also sliced out of this full-period run (the stress config re-runs them with a warm-up)
+stress:
+  warmup_days: 80
+  windows:
+    - {id: 2015_07_index_crash, title: 2015-07 股灾, start: "20150615", end: "20150731", focus_day: "20150708", products: [IF, IH, IC]}
+    - {id: 2016_11_black, title: 2016-11-14 黑色暴跌, start: "20161101", end: "20161130", focus_day: "20161114", products: [rb, hc, i, j]}
+    - {id: 2020_02_holiday, title: 2020-02-03 节后跌停, start: "20200115", end: "20200228", focus_day: "20200203"}
+    - {id: 2021_05_iron_ore, title: 2021-05 铁矿石, start: "20210501", end: "20210531", focus_day: "20210513", products: [i]}
+    - {id: 2021_10_coke, title: 2021-10 焦炭连跌后反弹, start: "20211008", end: "20211130", focus_day: "20211021", products: [j]}
+    - {id: 2024_10_if_limit_up, title: 2024-10-08 股指涨停开盘, start: "20240920", end: "20241031", focus_day: "20241008", products: [IF, IH, IC, IM]}
+seed: 20260928
+workers: auto

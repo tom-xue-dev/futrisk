@@ -1,0 +1,97 @@
+# Layer D: the acceptance scenario QS-03 (01 §6.3) reproduced in-process with known answers.
+#
+# ACC3 (initial capital 10,000,000) holds a long black book bought at the reference prices at 09:35:00:
+#   rb2701 125 lots @3100, hc2701 51 @3300, i2701 27 @800 (the demo weights .39/.17/.22, 0.77x equity).
+# The whole black sector then moves; the daily P&L (÷ initial capital, fees included) at each step is
+#   s1 -2.7% -> -2.09%  warn (ALERT)                         [rb 3016, hc 3211, i 778.5]
+#   s2 -3.3% -> -2.55%  restrict (RESTRICT: size x0.5, no adding to losers)
+#   s4 -4.0% -> -3.09%  halt: HALTED at once, not latched (PENDING)
+#   s5 -4.05% (0.5 s later: the second distinct LIVE state) -> confirmed: latched, exactly one ALERT_RAISED
+#   s6 an opening order is rejected REJECT_ACCOUNT_HALTED, a closing order is filled
+#   s7 back to -3.5%: the latch holds (only risk.reset or the day roll releases it)
+# The second scenario is a single bad tick: rb alone prints -9% for 300 ms; the halt goes PENDING (HALTED,
+# not latched) and is revoked by the next state before its confirmation - it must never latch.
+# Run: futrisk backtest run breaker_synthetic
+name: breaker_synthetic
+description: >-
+  D 层合成剧本：ACC3 多头黑色持仓依次越过 -2% / -2.5% / -3%，精确断言告警、限制、熔断（先待确认、确认后锁存）、
+  熔断后开仓被拒、平仓成交；以及一笔坏 tick 只能让熔断进入待确认、不能锁存。
+kind: scenario
+layer: D
+products: [rb, hc, i, j]
+accounts:
+  ACC3: {strategy: counter_trend_add, products: [rb, hc, i]}
+arms:
+  - {name: no_rules, tier: none}
+  - {name: block_open, tier: block_open}
+  - {name: flatten, tier: flatten}
+rules:
+  threshold: 0.03
+scenarios:
+  - name: acceptance_breaker
+    description: 验收场景 QS-03：告警 → 限制下单 → 熔断（待确认 → 锁存），熔断后开仓被拒、平仓照常。
+    trading_day: "20260929"
+    start: "09:35:00"
+    account: ACC3
+    reference: {rb2701: 3100, hc2701: 3300, i2701: 800}
+    book: {rb2701: 125, hc2701: 51, i2701: 27}
+    steps:
+      - {label: s0, at_s: 0, move: {black: 0.0}}
+      - {label: s1, at_s: 60, move: {black: -0.027}}
+      - {label: s2, at_s: 120, move: {black: -0.033}}
+      - label: s3
+        at_s: 180
+        move: {black: -0.033}
+        orders:
+          - {label: add_restricted, instrument: rb2701, side: BUY, offset: OPEN, qty: 5}
+      - {label: s4, at_s: 240, move: {black: -0.040}}
+      - {label: s5, at_s: 240.5, move: {black: -0.0405}}
+      - label: s6
+        at_s: 300
+        move: {black: -0.0405}
+        orders:
+          - {label: open_after_halt, instrument: i2701, side: BUY, offset: OPEN, qty: 2}
+          - {label: close_after_halt, instrument: rb2701, side: SELL, offset: CLOSE_TODAY, qty: 10}
+      - {label: s7, at_s: 360, move: {black: -0.035}}
+    expect:
+      arm_tier: block_open
+      checks:
+        - {type: event, level: warn, step: s1, n: 1}
+        - {type: event, level: restrict, step: s2, n: 1}
+        - {type: state, to: HALTED, latched: false, step: s4}
+        - {type: event, level: halt, step: s5, n: 1, latched: true}
+        - {type: state, to: HALTED, latched: true, step: s5}
+        - {type: order, label: add_restricted, result: REJECT_ADD_TO_LOSER}
+        - {type: order, label: open_after_halt, result: REJECT_ACCOUNT_HALTED}
+        - {type: order, label: close_after_halt, result: FILLED}
+        - {type: no_event, level: derisk}
+        - {type: count, kind: ALERT_RAISED, rule: daily_loss, n: 3}
+        - {type: final_state, state: HALTED, latched: true}
+  - name: single_bad_tick
+    description: 一笔坏 tick（rb 单独 -9%，300 毫秒后回到 -3.3%）：熔断只进入待确认，随即撤销，不锁存，之后开仓照常。
+    trading_day: "20260929"
+    start: "09:35:00"
+    account: ACC3
+    reference: {rb2701: 3100, hc2701: 3300, i2701: 800, j2701: 1800}
+    book: {rb2701: 125, hc2701: 51, i2701: 27}
+    steps:
+      - {label: s0, at_s: 0, move: {black: 0.0}}
+      - {label: s1, at_s: 60, move: {black: -0.027}}
+      - {label: s2, at_s: 120, move: {black: -0.033}}
+      - {label: s3, at_s: 180, move: {rb2701: -0.09}}
+      - {label: s4, at_s: 180.3, move: {rb2701: -0.033}}
+      - label: s5
+        at_s: 240
+        move: {black: -0.033}
+        orders:
+          - {label: open_after_revoke, instrument: j2701, side: BUY, offset: OPEN, qty: 1}
+    expect:
+      arm_tier: block_open
+      checks:
+        - {type: state, to: HALTED, latched: false, step: s3}
+        - {type: no_event, level: halt}
+        - {type: count, kind: ALERT_RAISED, rule: daily_loss, level: halt, n: 0}
+        - {type: order, label: open_after_revoke, result: FILLED}
+        - {type: final_state, state: RESTRICTED}
+seed: 20260928
+workers: 1

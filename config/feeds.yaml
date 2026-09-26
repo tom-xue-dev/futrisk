@@ -1,0 +1,50 @@
+# Market data sources and arbitration parameters (01 §8.13).
+feed_a:
+  enabled: true
+  url: "ws://127.0.0.1:7001/feed"
+  priority: 1
+feed_b:
+  enabled: true
+  url: "http://127.0.0.1:7002/v1/quotes"
+  poll_ms: 1000
+  timeout_ms: 800
+  priority: 2
+sina:
+  enabled: false        # live profile only; prices come from a different market than the sim
+  url: "https://hq.sinajs.cn/list="
+  referer: "https://finance.sina.com.cn"
+  poll_ms: 1500
+  timeout_ms: 1200
+  priority: 3
+  symbols:
+    rb2701: nf_RB2701
+    rb2705: nf_RB2705
+    hc2701: nf_HC2701
+    cu2611: nf_CU2611
+    au2612: nf_AU2612
+    i2701: nf_I2701
+    j2701: nf_J2701
+    m2701: nf_M2701
+    IF2612: CFF_RE_IF2612
+    IC2612: CFF_RE_IC2612
+    T2612: CFF_RE_T2612
+arbitration:
+  exclude_missed_heartbeats: 3
+  exclude_failed_polls: 3
+  exclude_reject_rate: 0.05
+  exclude_integrity_votes: 2
+  probation_healthy_s: 10
+  probation_agree_count: 3
+  min_dwell_s: 5
+  flapping_window_s: 300
+  flapping_max_switches: 4
+  reorder_buffer_max: 32
+  reorder_buffer_ms: 100
+  spike_confirm_ms: 2000
+  spike_ticks: 10
+  spike_z: 6.0
+  stale_s: 5
+  unknown_s: 30
+  open_grace_s: 30
+  live_max_latency_ms: 3000
+  watermark_flush_s: 1.0

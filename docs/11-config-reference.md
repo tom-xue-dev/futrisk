@@ -1,0 +1,827 @@
+# futrisk 配置参考
+
+| 项 | 内容 |
+|---|---|
+| 文档编号 | FR-DOC-11 |
+| 版本 | v0.1（按已实现的系统编写） |
+| 状态 | 实现对齐 |
+| 日期 | 2026-09-25 |
+| 适用范围 | `config/` 下的全部配置文件（运行时位于 `<home>/config/`），以及 `bots.yaml` 和相关环境变量 |
+| 对应标准 | —（参考手册）；字段表由 pydantic 模型生成 |
+| 关联文档 | [README](README.md)（规范）· [01 架构](01-architecture.md) · [02 通信协议](02-communication-protocol.md) · [04 风控规则](04-risk-rules.md) · [07 使用说明](07-user-guide.md) · [08 部署运维](08-deployment.md) |
+
+> 本文逐个配置文件列出每个字段的类型、是否必填、含义、默认值和热加载效果，并给出示例。字段表（`<!-- gen:... -->` 标记之间的内容）由 `scripts/gen_config_reference.py` 从 pydantic 模型生成，**不要手工修改**；改了配置模型之后重新生成（§1.6）。配置管理的设计见 01 §8.9，热加载协议见 02 §8.5。
+
+## 目录
+1. [配置的组织方式](#1-配置的组织方式)
+2. [app.yaml](#2-appyaml)
+3. [services.yaml](#3-servicesyaml)
+4. [products.yaml](#4-productsyaml)
+5. [accounts.yaml](#5-accountsyaml)
+6. [risk_rules.yaml](#6-risk_rulesyaml)
+7. [feeds.yaml](#7-feedsyaml)
+8. [sim.yaml](#8-simyaml)
+9. [scenarios/*.yaml](#9-scenariosyaml)
+10. [backtest/*.yaml](#10-backtestyaml)
+11. [calendar/trading_days.csv](#11-calendartrading_dayscsv)
+12. [bots.yaml（可选）](#12-botsyaml可选)
+13. [环境变量](#13-环境变量)
+- [附录 A 修订记录](#附录-a-修订记录)
+
+---
+
+## 1. 配置的组织方式
+
+### 1.1 文件一览
+
+<!-- gen:files begin -->
+| 文件 | pydantic 模型 | 读取方 | 热加载（概要） |
+|---|---|---|---|
+| `app.yaml` | `futrisk.common.config.app.AppConfig` | 全部服务、CLI | 大部分重启生效；`eod_start_at`、`api_keys`、`notify` 即时 |
+| `services.yaml` | `futrisk.common.config.services.ServicesConfig` | 全部内部服务、CLI | 端点、总线参数拒绝热改；`supervisor` 段重启 supervisor 生效 |
+| `products.yaml` | `futrisk.common.config.products.ProductsConfig` | md-gateway、risk-engine、clearing-worker、strategy-sim、回测 | 下一交易日（risk-engine 重启后才用新值，TD-09） |
+| `accounts.yaml` | `futrisk.common.config.accounts.AccountsConfig` | risk-engine、api-gateway、clearing-worker、strategy-sim、`futrisk demo` | 分片归属拒绝热改；其余见各字段 |
+| `risk_rules.yaml` | `futrisk.common.config.risk_rules.RiskRulesConfig` | risk-engine（各分片）、api-gateway、仪表盘 | 即时（已锁存的熔断保持到重置或换日） |
+| `feeds.yaml` | `futrisk.common.config.feeds.FeedsConfig` | md-gateway；`futrisk data`（读包内默认配置） | `arbitration` 即时；数据源段拒绝热改 |
+| `sim.yaml` | `futrisk.common.config.sim.SimConfig` | sim-exchange、`futrisk demo`（首日建账的昨结算）、trade-gateway（柜台端点） | 重启 sim-exchange（外部组件，不参与两阶段提交） |
+| `scenarios/*.yaml` | `futrisk.sim.exchange.scenario.ScenarioFile` | sim-exchange（每次 `scenario run`） | 每次运行时读取 sim-exchange 启动时的配置版本目录 |
+| `backtest/*.yaml` | `futrisk.backtest.config.BacktestConfig` | `futrisk backtest`、clearing-worker 的回测作业 | 每次运行时读取（包内 `config/backtest/` 或给定的 YAML 路径） |
+| `bots.yaml` | `futrisk.sim.bots.config.BotsConfig` | strategy-sim（可选文件） | 重启 strategy-sim |
+| `calendar/trading_days.csv` | —（CSV，`futrisk.common.calendar.TradingCalendar`） | 全部服务、回测 | 下一交易日（risk-engine 需重启） |
+<!-- gen:files end -->
+
+### 1.2 工作目录、版本快照与生效版本
+
+| 位置 | 作用 | 谁来写 |
+|---|---|---|
+| 仓库的 `config/`（exe 为 `futrisk\_internal\config\`） | 包内默认配置 | 开发者 |
+| `<home>/config/` | **工作目录**：管理员编辑的地方。首次启动时从包内默认配置复制过来 | 管理员 |
+| `<home>/config/versions/<N>/` | 不可变的版本快照：每次热加载把工作目录复制成一个新版本 | api-gateway（热加载时） |
+| `<home>/config/active.json` | 当前生效的版本：`{config_version, path, effective}` | api-gateway（提交时原子替换） |
+
+- 各服务启动时**只加载 `active.json` 指向的版本**，不读工作目录。所以只改工作目录、不热加载，重启后也不会生效；被拒绝的改动也不会在重启时被误加载（01 §6.7）。
+- 首次启动（`<home>/config/app.yaml` 不存在）时，把包内默认配置复制到工作目录，并提交为版本 1。
+- `effective` 记录"下一交易日生效"的部分从哪个交易日起生效（02 §7.10），clearing-worker 按交易日选用配置版本来结算。
+
+### 1.3 热加载与生效时机
+
+改配置的标准流程：编辑 `<home>/config/` 下的文件 → `futrisk config validate --home <home>` → 调用 `POST /api/v1/config/reload`（ADMIN，操作步骤见 07 §5.4）。api-gateway 用两阶段提交让所有内部服务一起切换到新版本，任一服务否决或超时则整体放弃（02 §8.5）。表中"热加载"一列的取值：
+
+| 取值 | 含义 |
+|---|---|
+| 即时 | 提交后立即生效（风控阈值在下一次评估时就用新值） |
+| 下一交易日 | 与交易所公告的生效方式一致，从下一个交易日起生效。md-gateway 在换日时切换，clearing-worker 按交易日选版本；**risk-engine 要到进程下一次启动才用新值**（TD-09），所以应当在 EOD 之后提交，并在下一个交易时段开始前重启各风控分片 |
+| 重启 X | 可以热加载提交，但 X 只在启动时读取该字段，要重启 X（`futrisk down` 再 `futrisk up`，或仪表盘"行情与系统"页的"重启"）才生效 |
+| 拒绝热改 | 参与方在 prepare 阶段否决（如端点、数据源改动），这一轮热加载整体放弃（`ABORTED`）。这类改动只能停机后离线提交新版本（08 §4.5），或换一个新的 home |
+| 仅首次启动 | 只在 home 第一次启动时读取 |
+| 每次运行时读取 | 不参与热加载：每次执行命令或作业时现读文件 |
+| 不读取 | 预留字段，当前版本不使用 |
+
+sim-exchange 和 strategy-sim 是外部组件，不参与两阶段提交，只在启动时读取已提交的版本。
+
+### 1.4 书写约定
+- 金额、价格、费率、保证金率写成**带引号的十进制字符串**（如 `"0.0001"`、`"10000000"`），按 `Decimal` 精确解析，避免二进制浮点误差；比率一律为小数，−0.03 表示 −3%（README §3.4）。
+- 时刻写成北京时间 `HH:MM`；交易日写成加引号的 `YYYYMMDD` 字符串（不加引号时 YAML 解析成整数，字符串字段的校验会失败）。
+- 所有模型都禁止多余的键（pydantic `extra="forbid"`）：拼错的键会让校验失败，而不是被悄悄忽略。
+- YAML 用 `safe_load` 读取，文件编码为 UTF-8。
+
+### 1.5 校验、查看与导出
+
+| 目的 | 命令 |
+|---|---|
+| 校验包内默认配置 | `futrisk config validate` |
+| 校验某个 home 的工作目录 | `futrisk config validate --home <home>`（或 `--dir <目录>`） |
+| 打印工作目录中各文件校验后的值（含默认值） | `futrisk config show risk_rules --home <home>`；不带参数打印全部 |
+| 导出 JSON Schema | `futrisk config schema --out <目录>`，每个文件一个 `<section>.schema.json` |
+| 运行中系统实际使用的配置 | `GET /api/v1/config`（版本号、哈希、各文件哈希和全部配置）；`GET /api/v1/config/versions`（热加载历史） |
+
+`config validate` 和 `config show` 只覆盖 7 个 YAML 文件和交易日历；场景剧本在 `scenario run` 时校验，回测配置在 `backtest run` 时校验，`bots.yaml` 在 strategy-sim 启动时校验。
+
+### 1.6 本文的生成方式
+
+```powershell
+.venv\Scripts\python scripts\gen_config_reference.py            # 重新生成本文中的字段表
+.venv\Scripts\python scripts\gen_config_reference.py --check    # 本文过期时退出码为 1（可放进 CI）
+.venv\Scripts\python scripts\gen_config_reference.py --print app  # 只打印一张表
+```
+
+- 类型、是否必填、默认值直接取自 pydantic 模型；"说明"和"热加载"两列保存在脚本里。模型新增了字段而脚本里没有说明时，脚本报错并以退出码 1 结束，所以新配置键不会漏写文档。
+- 只替换 `<!-- gen:名称 begin -->` 与 `<!-- gen:名称 end -->` 之间的内容，其余文字手工维护。
+- 字段路径的写法：`a.b` 表示嵌套字段；`{name}` 表示映射的键（如 `products.{product}.tick_size`）；`[]` 表示列表元素（如 `rules[].levels[].threshold`）。
+
+---
+
+## 2. app.yaml
+
+运行模式、演示时钟、EOD 时刻、日志、API key 和告警通知。
+
+<!-- gen:app begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `mode` | `demo` \| `prod` | 否 | 运行模式。`demo`：市场时间 = 本机时间 + 全系统共享的偏移（可跳转），开放 `/demo/*` 演示接口和虚拟交易所控制接口，`futrisk demo` 自动建账；`prod`：市场时间就是本机时间，演示接口返回 403 | `demo` | 重启全部服务 |
+| `demo` | 对象 | 否 | 演示模式参数（`mode=demo` 时使用） | 见子字段 | 见子字段 |
+| `demo.start_at` | `str` \| `null` | 否 | 首次启动时的市场时间，ISO 格式，不带时区即北京时间；`null` 表示下一个交易日的 08:58（开盘集合竞价之前）。只在 supervisor.db 里还没有时钟状态时使用，`futrisk demo --start-at` 可以覆盖 | `null` | 仅首次启动 |
+| `demo.pre_close_at` | `str` | 否 | `futrisk clock jump --to pre-close`（`PRE_CLOSE`）跳到的当日时刻，北京时间 HH:MM | `14:58` | 重启 supervisor |
+| `demo.lead_s` | `int` | 否 | `futrisk clock jump --to next-open`（`NEXT_OPEN`）跳到下一个交易时段开始前多少秒 | `120` | 重启 supervisor |
+| `demo.auto_seed` | `bool` | 否 | `futrisk demo` 发现本 home 还没有账本时，按 `accounts.yaml` 调用 `POST /settlement/seed-sod` 首日建账 | `true` | 下次 `futrisk demo` |
+| `eod_start_at` | `str` | 否 | EOD 自动开始的市场时间（北京时间 HH:MM）：clearing-worker 的调度器在当日该时刻之后启动结算流程。生产环境应当晚于经纪商的出入金截止时间（一般 17:00） | `15:30` | 即时 |
+| `logging` | 对象 | 否 | 日志参数（01 §8.7） | 见子字段 | 重启各进程 |
+| `logging.level` | `str` | 否 | 日志级别：`TRACE`、`DEBUG`、`INFO`、`WARNING`、`ERROR` | `INFO` | 重启各进程 |
+| `logging.retention_days` | `int` | 否 | 日志文件保留天数，超期的压缩文件自动删除 | `30` | 重启各进程 |
+| `logging.rotation_mb` | `int` | 否 | 单个日志文件超过该大小（MB）时切分；此外每天切分一次 | `100` | 重启各进程 |
+| `api_keys` | 对象列表 | 否 | 具名 API key。存在可用的具名 ADMIN key 时，bootstrap key 自动停用并删除文件 | `[]` | 即时（需环境变量） |
+| `api_keys[].name` | `str` | 是 | key 的名字，即 `key_id`，作为操作者写入审计；不能重复，不能叫 `bootstrap` | — | 即时（需环境变量） |
+| `api_keys[].role` | `VIEWER` \| `TRADER` \| `RISK_MANAGER` \| `ADMIN` | 是 | 角色，权限矩阵见 02 §9.6 | — | 即时（需环境变量） |
+| `api_keys[].key_env` | `str` | 是 | 保存明文 key 的环境变量名。明文至少 16 个字符，api.db 只存 SHA-256；变量缺失或过短时该 key 停用 | — | 即时（需环境变量） |
+| `notify` | 对象 | 否 | 告警通知（webhook，02 §9.8） | 见子字段 | 即时（需环境变量） |
+| `notify.webhook_url_env` | `str` \| `null` | 否 | 保存 webhook URL 的环境变量名；`null` 或变量为空时只写日志 | `null` | 即时（需环境变量） |
+| `notify.channel` | `wecom` \| `dingtalk` \| `feishu` \| `log` | 否 | 消息格式：企业微信 `wecom`、钉钉 `dingtalk`、飞书 `feishu`，或 `log`（只写日志） | `log` | 即时（需环境变量） |
+| `notify.min_severity` | `INFO` \| `WARNING` \| `HIGH` \| `CRITICAL` | 否 | `risk.event` 低于该级别不发通知；CRITICAL 从不被抑制 | `HIGH` | 即时（需环境变量） |
+<!-- gen:app end -->
+
+示例（仓库自带的 `config/app.yaml`，另加一个具名 ADMIN key 和企业微信通知）：
+
+```yaml
+mode: demo
+demo:
+  start_at: null            # 首次启动时放在下一个交易日 08:58
+  pre_close_at: "14:58"
+  lead_s: 120
+  auto_seed: true
+eod_start_at: "15:30"
+logging: {level: INFO, retention_days: 30, rotation_mb: 100}
+api_keys:
+  - {name: ops, role: ADMIN, key_env: FUTRISK_OPS_KEY}      # 明文放在环境变量 FUTRISK_OPS_KEY 中
+  - {name: rm1, role: RISK_MANAGER, key_env: FUTRISK_RM1_KEY}
+notify:
+  webhook_url_env: FUTRISK_WECOM_URL
+  channel: wecom
+  min_severity: HIGH
+```
+
+- 具名 key 的明文从 api-gateway **进程的环境变量**读取。进程由 supervisor 拉起、继承它的环境，所以变量必须在执行 `futrisk up` / `futrisk demo` 之前就设置好；已经运行的系统里新增变量，要重启整个系统才能读到。
+- 配置了可用的具名 ADMIN key 之后，bootstrap key 停用、文件被删除，CLI 需要用 `FUTRISK_API_KEY` 提供 key（§13）。
+
+## 3. services.yaml
+
+内部服务的端点、总线参数和进程守护策略（02 §3）。
+
+<!-- gen:services begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `profile` | `str` | 否 | 档位名称（仓库自带 `demo`，docker compose 用 `docker`），只作标识 | `demo` | 拒绝热改 |
+| `bus` | 对象 | 否 | 内部总线参数（02 §4） | 见子字段 | 拒绝热改 |
+| `bus.heartbeat_ms` | `int` | 否 | 每个服务发送心跳 `sys.heartbeat.{instance}` 的周期（毫秒） | `1000` | 拒绝热改 |
+| `bus.peer_timeout_missed` | `int` | 否 | 连续丢失多少个心跳周期判定对端 DOWN | `3` | 拒绝热改 |
+| `bus.hang_threshold_ms` | `int` | 否 | 心跳里的 `loop_lag_ms` 连续两次超过该值，supervisor 判定主循环卡死并重启该进程 | `30000` | 拒绝热改 |
+| `bus.pub_hwm` | `int` | 否 | PUB 套接字的发送高水位（条），超出时按 02 §4.9 丢弃最新值类消息 | `10000` | 拒绝热改 |
+| `bus.md_pub_hwm` | `int` | 否 | md-gateway 的 PUB 发送高水位（条） | `100000` | 拒绝热改 |
+| `bus.router_hwm` | `int` | 否 | ROUTER 套接字的高水位（条） | `1000` | 拒绝热改 |
+| `bus.replay_window_days` | `int` | 否 | FACT 主题的重放窗口：outbox 中已发布的消息保留的天数 | `7` | 拒绝热改 |
+| `bus.gc` | 对象 | 否 | 服务进程的垃圾回收策略（01 §11 RK-01） | 见子字段 | 拒绝热改 |
+| `bus.gc.enabled` | `bool` | 否 | 是否启用自动垃圾回收 | `true` | 拒绝热改 |
+| `bus.gc.threshold` | `tuple[int, int, int]` | 否 | 启动时设置的 `gc.set_threshold` 三代阈值；调大第 0 代阈值以减少回收停顿 | `[10000, 20, 100]` | 拒绝热改 |
+| `bus.gc.freeze_on_running` | `bool` | 否 | 服务报告 RUNNING 时执行一次 `gc.collect()` 和 `gc.freeze()`，启动期创建的对象此后不再被扫描 | `true` | 拒绝热改 |
+| `instances` | {instance: 对象} | 是 | 每个内部服务实例的端点；实例名见 README §3.3（分片实例为 `risk-engine-{shard}`） | — | 拒绝热改 |
+| `instances.{instance}.pub` | `str` \| `null` | 否 | PUB 端点（`tcp://host:port`），发布事件和心跳 | `null` | 拒绝热改 |
+| `instances.{instance}.router` | `str` \| `null` | 否 | ROUTER 端点，接收命令 | `null` | 拒绝热改 |
+| `instances.{instance}.http` | `str` \| `null` | 否 | HTTP 监听地址，只有 api-gateway 使用（REST、WebSocket、仪表盘） | `null` | 拒绝热改 |
+| `instances.{instance}.shard` | `int` \| `null` | 否 | risk-engine 的分片号，与 `accounts.yaml` 的 `shard` 对应 | `null` | 拒绝热改 |
+| `instances.{instance}.coordinator` | `bool` | 否 | 是否兼任 coordinator（汇总公司层指标）；只能有一个分片为 `true` | `false` | 拒绝热改 |
+| `supervisor` | 对象 | 否 | 进程守护参数（01 §5.3.6） | 见子字段 | 重启 supervisor |
+| `supervisor.startup_order` | `list[str]` | 否 | 启动顺序；停机按相反顺序。每一步只等上一个进程存活，不等它进入 RUNNING | `[sim-exchange, md-gateway, trade-gateway, clearing-worker, risk-engine-0, risk-engine-1, api-gateway, strategy-sim]` | 重启 supervisor |
+| `supervisor.external` | `list[str]` | 否 | 外部组件：不在总线上、没有总线心跳，按进程存活和健康检查判断 | `[sim-exchange, strategy-sim]` | 重启 supervisor |
+| `supervisor.restart` | 对象 | 否 | 崩溃后的重启策略：指数退避 | 见子字段 | 重启 supervisor |
+| `supervisor.restart.backoff_initial_ms` | `int` | 否 | 第一次重启前的等待（毫秒），之后每次翻倍 | `1000` | 重启 supervisor |
+| `supervisor.restart.backoff_max_ms` | `int` | 否 | 重启等待的上限（毫秒） | `30000` | 重启 supervisor |
+| `supervisor.restart.stable_reset_s` | `int` | 否 | 连续运行满该秒数后，退避计数清零 | `60` | 重启 supervisor |
+| `supervisor.liveness_timeout_s` | `float` | 否 | 进程启动后在该秒数内没有存活信号即判定启动失败；5 分钟内失败 5 次后停止重试（`GAVE_UP`） | `20` | 重启 supervisor |
+| `supervisor.shutdown_grace_s` | `float` | 否 | 停机时发出 `ctl.shutdown` 后等待的秒数，超时再发 CTRL_BREAK，最后强制结束 | `10` | 重启 supervisor |
+<!-- gen:services end -->
+
+- 默认档位把所有端点绑定在 `127.0.0.1`，端口见 07 §2.4；docker 部署使用 `deploy/config/services.yaml`（`docker` 档位，主机名换成 compose 服务名，08 §3）。
+- 在同一台机器上运行第二套系统时，要同时改本文件、`sim.yaml` 和 `feeds.yaml` 中的全部端口（07 §7.2）。
+
+## 4. products.yaml
+
+交易时段模板、交易所规则、品种和合约。这些参数决定清算的正确性（01 §8.15、05 文档）；数值是示例值，以交易所最新公告为准（TD-04）。
+
+<!-- gen:products begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `session_templates` | `dict[str, list[list[str]]]` | 是 | 交易时段模板：模板名 → 时段列表，每个时段为 `[开始, 结束, 类型]`（北京时间 HH:MM；类型为 `auction`、`auction_no_night`、`continuous`）。结束早于开始表示跨午夜（夜盘） | — | 下一交易日（risk-engine 需重启） |
+| `exchanges` | {exchange: 对象} | 是 | 交易所级规则（01 §8.15），键为交易所代码 | — | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.explicit_close_today` | `bool` | 否 | 平仓委托必须显式区分平今和平昨（SHFE/INE 为 `true`） | `false` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.close_style` | `FIFO` \| `TODAY_FIRST` | 否 | 平仓时消耗 lot 的顺序：`FIFO` 先开先平；`TODAY_FIRST` 先平今仓 | `FIFO` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.close_today_fee_rule` | `LOT_MATCH` \| `SAME_DAY_OPENS_FIRST` \| `INTRADAY_BOTH_LEGS` | 否 | 平今手续费的判定：`LOT_MATCH` 按实际消耗的今仓 lot；`SAME_DAY_OPENS_FIRST` 先平当日新开仓（CFFEX）；`INTRADAY_BOTH_LEGS` 当日开当日平时两腿都按日内费率（DCE） | `LOT_MATCH` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.settle_rounding` | `FLOOR_TICK` \| `ROUND_TICK` \| `NONE` | 否 | 结算价取整：`FLOOR_TICK` 向下取整到 tick（SHFE）、`ROUND_TICK` 四舍五入到 tick、`NONE` 不取整 | `ROUND_TICK` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.settle_fallback` | `list[str]` | 否 | 当日无成交时结算价的回退链，依次尝试：`MEDIAN`（买一、卖一、昨结三者中位数）、`LIMIT`（封板取涨跌停价）、`HOURLY`（逐小时回溯）、`FULLDAY`（全日 VWAP）、`BENCHMARK`（基准合约涨跌幅）、`PRE_SETTLE`（昨结算） | `[PRE_SETTLE]` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.big_side` | `NONE` \| `SAME_PRODUCT` \| `GROUPS` | 否 | 单向大边：`NONE` 不实行；`SAME_PRODUCT` 同品种按保证金较大一边（SHFE）；`GROUPS` 按 `big_side_group` 分组（CFFEX） | `NONE` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.big_side_exit` | `NONE` \| `LAST_TRADE_DAY_MINUS_5` \| `PHYSICAL_DELIVERY_MONTH_MINUS_1` | 否 | 合约退出单向大边的时点：`LAST_TRADE_DAY_MINUS_5` 最后交易日前第 5 个交易日；`PHYSICAL_DELIVERY_MONTH_MINUS_1` 实物交割月前一个交易日；`NONE` 不退出 | `NONE` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.cancel_limit` | `int` \| `null` | 否 | 每个合约每日撤单次数上限（合规指标 `account.compliance_util` 的分母，达到即拒绝撤单）；`null` 不限制 | `null` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.large_cancel` | 对象 \| `null` | 否 | 大额撤单限制；`null` 不限制 | `null` | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.large_cancel.count` | `int` | 是 | 每个合约每日大额撤单次数上限 | — | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.large_cancel.min_qty` | `int` | 是 | 单笔手数不小于该值的撤单算大额撤单 | — | 下一交易日（risk-engine 需重启） |
+| `exchanges.{exchange}.self_trade_limit` | `int` | 否 | 每日自成交次数上限（合规指标的分母） | `5` | 下一交易日（risk-engine 需重启） |
+| `products` | {product: 对象} | 是 | 品种规则，键为品种代码（`rb`、`IF` 等） | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.exchange` | `SHFE` \| `DCE` \| `CFFEX` \| `INE` \| `CZCE` \| `GFEX` | 是 | 所属交易所，须在 `exchanges` 中配置 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.name` | `str` | 否 | 中文名称，用于界面和报表 | `""` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.sector` | `str` | 是 | 板块（`black`、`nonferrous`、`precious`、`agri`、`equity_index`、`rates` 等），板块类规则按它汇总 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.multiplier` | `int` | 是 | 合约乘数 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.tick_size` | `decimal` | 是 | 最小变动价位 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.limit_pct` | `decimal` | 是 | 涨跌停幅度（小数，0.05 表示 ±5%） | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.limit_schedule` | 对象列表 | 否 | 带生效日期的涨跌停调整（例如节前放宽）；取生效日不晚于当前交易日的最新一条 | `[]` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.limit_schedule[].effective_from` | `str` | 是 | 开始生效的交易日（YYYYMMDD） | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.limit_schedule[].pct` | `decimal` | 是 | 新的涨跌停幅度 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.settle_method` | `VWAP_FULL_DAY` \| `VWAP_LAST_HOUR` | 否 | 结算价方法：`VWAP_FULL_DAY` 全日（含夜盘）成交量加权平均；`VWAP_LAST_HOUR` 最后一小时 VWAP（CFFEX） | `VWAP_FULL_DAY` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.settle_window` | `str` \| `null` | 否 | `VWAP_LAST_HOUR` 的时间窗 `HH:MM-HH:MM`（IF 为 14:00-15:00，T 为 14:15-15:15） | `null` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.big_side_group` | `str` \| `null` | 否 | 单向大边分组名，同组合约合并计算大边（如 `CFFEX:INDEX`） | `null` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.physical_delivery` | `bool` | 否 | 实物交割品种（CFFEX 国债）：交割月前一个交易日退出单向大边 | `false` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.sessions` | `list[str]` | 是 | 使用的交易时段模板名（`session_templates` 的键） | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees` | 对象列表 | 是 | 手续费规则，带生效日期；匹配顺序：`contracts` 列表 → `months` → `other` | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].months` | `list[int]` \| `other` \| `null` | 否 | 适用的合约月份列表，或 `other` 表示其余月份；`null` 表示所有月份 | `null` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].contracts` | `list[str]` \| `null` | 否 | 适用的具体合约列表（优先于 `months`） | `null` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].effective_from` | `str` | 否 | 开始生效的交易日（YYYYMMDD） | `19700101` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].type` | `rate` \| `per_lot` | 是 | `rate` 按成交金额的比例；`per_lot` 按手收固定金额（元） | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].open` | `decimal` | 是 | 开仓费率或每手金额 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].close_yd` | `decimal` | 是 | 平昨费率或每手金额 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].close_today_mult` | `decimal` | 否 | 平今手续费 = 平昨费率 × 该倍数（0 表示平今免收） | `1` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.fees[].intraday` | `decimal` \| `null` | 否 | DCE：当日开当日平时，两腿都按这个费率收取；`null` 表示不适用 | `null` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.margin` | 对象列表 | 是 | 保证金率，带生效日期；可以按合约覆盖。同一时点取生效中的最高费率 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.margin[].contracts` | `list[str]` \| `*` | 否 | 适用合约：`*` 表示全部，或合约列表 | `*` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.margin[].effective_from` | `str` | 否 | 开始生效的交易日（YYYYMMDD） | `19700101` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.margin[].exchange_rate` | `decimal` | 是 | 交易所保证金率 | — | 下一交易日（risk-engine 需重启） |
+| `products.{product}.margin[].broker_add` | `decimal` | 否 | 经纪商加收；公司保证金率 = `exchange_rate` + `broker_add` | `0` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.max_order_qty` | `dict[str, int]` | 否 | 单笔最大手数，按委托类型（`LIMIT`、`MARKET`），事前检查第 1 步使用 | `{LIMIT: 1000, MARKET: 1000}` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.position_limit` | `int` \| `null` | 否 | 单边持仓上限（手），事前检查的持仓步骤使用；`null` 不限制 | `null` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.open_limit_per_day` | `int` \| `null` | 否 | 每日开仓手数上限（合规指标的分母）；`null` 不限制 | `null` | 下一交易日（risk-engine 需重启） |
+| `products.{product}.notional_face` | `decimal` \| `null` | 否 | 国债期货面值：合约价值 = 价格 × 面值 / 100（策略 SDK 使用）；`null` 表示按乘数计算 | `null` | 下一交易日（risk-engine 需重启） |
+| `instruments` | 对象列表 | 是 | 可交易的合约列表 | — | 下一交易日（risk-engine 需重启） |
+| `instruments[].instrument_id` | `str` | 是 | 合约代码，按交易所原始大小写（README §3.3） | — | 下一交易日（risk-engine 需重启） |
+| `instruments[].product` | `str` | 是 | 所属品种（`products` 的键） | — | 下一交易日（risk-engine 需重启） |
+| `instruments[].last_trade_day` | `str` | 是 | 最后交易日（YYYYMMDD）；之后不再接受委托，单向大边的退出日也据此推算 | — | 下一交易日（risk-engine 需重启） |
+| `instruments[].listed_day` | `str` | 否 | 上市日（YYYYMMDD）；之前不接受委托 | `20200101` | 下一交易日（risk-engine 需重启） |
+| `instruments[].delivery_month` | `str` \| `null` | 否 | 交割月（YYYYMM）；`null` 时按合约代码推算 | `null` | 下一交易日（risk-engine 需重启） |
+<!-- gen:products end -->
+
+示例（节选 `config/products.yaml`）：
+
+```yaml
+session_templates:
+  night_2100_2300: [["20:55", "21:00", "auction"], ["21:00", "23:00", "continuous"]]
+  day_commodity:
+    - ["08:55", "09:00", "auction_no_night"]
+    - ["09:00", "10:15", "continuous"]
+    - ["10:30", "11:30", "continuous"]
+    - ["13:30", "15:00", "continuous"]
+exchanges:
+  SHFE: {explicit_close_today: true, close_style: FIFO, close_today_fee_rule: LOT_MATCH,
+         settle_rounding: FLOOR_TICK, settle_fallback: [MEDIAN, LIMIT, PRE_SETTLE],
+         big_side: SAME_PRODUCT, big_side_exit: LAST_TRADE_DAY_MINUS_5,
+         cancel_limit: 500, large_cancel: {count: 50, min_qty: 300}, self_trade_limit: 5}
+products:
+  rb:
+    exchange: SHFE
+    name: 螺纹钢
+    sector: black
+    multiplier: 10
+    tick_size: "1"
+    limit_pct: "0.05"
+    settle_method: VWAP_FULL_DAY
+    big_side_group: "SHFE:rb"
+    sessions: [night_2100_2300, day_commodity]
+    fees:
+      - {months: [1, 5, 10], effective_from: "20260101", type: rate, open: "0.0001", close_yd: "0.0001", close_today_mult: "1"}
+      - {months: other, effective_from: "20260101", type: rate, open: "0.00002", close_yd: "0.00002", close_today_mult: "1"}
+    margin:
+      - {contracts: "*", effective_from: "20260101", exchange_rate: "0.07", broker_add: "0.01"}
+      - {contracts: [rb2610], effective_from: "20260901", exchange_rate: "0.10", broker_add: "0.01"}
+    max_order_qty: {LIMIT: 500, MARKET: 30}
+instruments:
+  - {instrument_id: rb2701, product: rb, last_trade_day: "20270115", delivery_month: "202701"}
+```
+
+- 交易日历的变化和本文件一样按"下一交易日"生效；新增合约除了写进 `instruments`，模拟环境还要在 `sim.yaml` 的 `price_engine.instruments` 中给出价格参数。
+
+## 5. accounts.yaml
+
+策略账户和分片归属。
+
+<!-- gen:accounts begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `accounts` | {account_id: 对象} | 是 | 账户表，键为账户 ID（1~32 个字母、数字、`_`、`-`；演示环境为 `ACC1`~`ACC5`） | — | 见子字段 |
+| `accounts.{account_id}.name` | `str` | 是 | 账户名称，用于界面、报表和结算单 | — | 即时 |
+| `accounts.{account_id}.shard` | `int` | 是 | 所属 risk-engine 分片；`services.yaml` 中必须有 `risk-engine-{shard}` 实例 | — | 拒绝热改 |
+| `accounts.{account_id}.initial_capital` | `decimal` | 是 | 初始资金（元）。单位净值和验收口径的当日盈亏比率都以它为分母；首日建账时作为上日结存 | — | 首日建账时读取 |
+| `accounts.{account_id}.strategy` | `str` \| `null` | 否 | strategy-sim 为该账户运行的策略名（`channel_breakout`、`multi_trend`、`counter_trend_add`、`index_directional`、`rb_calendar_spread`）；回测也用它作默认策略 | `null` | 重启 strategy-sim |
+| `accounts.{account_id}.products` | `list[str]` | 否 | 策略交易的品种 | `[]` | 重启 strategy-sim |
+| `accounts.{account_id}.initial_positions` | 对象列表 | 否 | 预留字段：首日建账的初始持仓。当前版本不读取（首日建账只写资金，持仓为空） | `[]` | 不读取 |
+| `accounts.{account_id}.initial_positions[].instrument_id` | `str` | 是 | 合约代码 | — | 不读取 |
+| `accounts.{account_id}.initial_positions[].direction` | `LONG` \| `SHORT` | 是 | 持仓方向 | — | 不读取 |
+| `accounts.{account_id}.initial_positions[].qty` | `int` | 是 | 手数 | — | 不读取 |
+| `accounts.{account_id}.initial_positions[].open_price` | `decimal` | 是 | 开仓价 | — | 不读取 |
+| `accounts.{account_id}.initial_positions[].open_td` | `str` \| `null` | 否 | 开仓交易日（YYYYMMDD） | `null` | 不读取 |
+<!-- gen:accounts end -->
+
+示例：
+
+```yaml
+accounts:
+  ACC3:
+    name: 日内逆势加仓
+    shard: 1
+    initial_capital: "10000000"
+    strategy: counter_trend_add
+    products: [rb, hc, i]
+```
+
+- 增加、删除账户或改变分片归属会被所属 risk-engine 否决（它的账户集合在进程内固定），只能停机后离线提交（08 §4.5）；新账户还要首日建账（`POST /api/v1/settlement/seed-sod`，07 §5.1）。
+
+## 6. risk_rules.yaml
+
+声明式风控规则、事前检查参数和风控核心的系统参数。默认阈值及其理由见 04 §4，状态机语义见 04 §6。
+
+### 6.1 字段
+
+<!-- gen:risk_rules begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `rules` | 对象列表 | 是 | 声明式风控规则（01 §8.14），与 02 §7.6 的 `RuleDef` 一一对应 | — | 即时 |
+| `rules[].id` | `str` | 是 | 规则 ID，写入 `alert_key`（`{td}\|{rule_id}\|{level}\|{scope_key}\|{episode}`） | — | 即时 |
+| `rules[].metric` | `str` | 是 | 指标名，须是已注册的指标（见本文 §6.2） | — | 即时 |
+| `rules[].op` | `<=` \| `>=` \| `<` \| `>` | 是 | 越线方向：亏损类用 `<=`，占比类用 `>=` | — | 即时 |
+| `rules[].scope` | `str` | 否 | 评估范围：`account`、`account/product`、`account/sector`、`firm`、`firm/product`、`firm/sector` | `account` | 即时 |
+| `rules[].hysteresis` | `float` | 否 | 滞回比例：解除线 = 阈值 × (1 − hysteresis) | `0.2` | 即时 |
+| `rules[].cooldown_s` | `int` | 否 | 回到 OK 后，同一 ALERT 级别在该秒数内不再触发（升级不受限制；限制和熔断类级别不适用） | `60` | 即时 |
+| `rules[].hold_ms` | `int` | 否 | 未锁存的级别要在解除线之外连续停留该毫秒数才解除 | `3000` | 即时 |
+| `rules[].pretrade` | `bool` | 否 | 是否参与事前检查的 what-if 预估（下单前预估本单会不会让指标越线） | `false` | 即时 |
+| `rules[].enabled` | `bool` | 否 | `false` 时不评估该规则 | `true` | 即时 |
+| `rules[].reset_on_day_roll` | `bool` | 否 | 换日时是否解除该规则的锁存 | `true` | 即时 |
+| `rules[].min_gross_pct` | `float` \| `null` | 否 | 账户总名义敞口 / 权益低于该值时不评估（视为未越线），`null` 表示总是评估 | `null` | 即时 |
+| `rules[].levels` | 对象列表 | 是 | 级别列表，每级一个阈值和动作 | — | 即时 |
+| `rules[].levels[].name` | `str` | 是 | 级别名（如 `warn`、`restrict`、`halt`、`derisk`），写入 `alert_key` | — | 即时 |
+| `rules[].levels[].threshold` | `float` | 是 | 阈值（比率一律为小数） | — | 即时 |
+| `rules[].levels[].action` | `ALERT` \| `RESTRICT` \| `CIRCUIT_BREAK` \| `LIQUIDATE` | 是 | 动作：`ALERT` 告警；`RESTRICT` 限制下单；`CIRCUIT_BREAK` 熔断；`LIQUIDATE` 生成减仓计划 | — | 即时 |
+| `rules[].levels[].params` | `dict[str, any]` | 否 | 动作参数，见本文 §6.3 | `{}` | 即时 |
+| `rules[].levels[].latch` | `bool` | 否 | 确认后锁存：只能由 `risk.reset` 或换日解除（熔断级别为 `true`） | `false` | 即时 |
+| `rules[].levels[].confirm` | 对象 | 否 | 确认条件：满足其一即从 PENDING 转为 ACTIVE | 见子字段 | 即时 |
+| `rules[].levels[].confirm.states` | `int` | 否 | 需要的不同 LIVE 市场状态数；`0` 表示只按时间确认 | `1` | 即时 |
+| `rules[].levels[].confirm.ms` | `int` | 否 | 越线持续的毫秒数 | `0` | 即时 |
+| `rules[].levels[].rearm` | 对象 \| `null` | 否 | 锁存级别经人工重置后的重新布防参数；`null` 表示不重新布防 | `null` | 即时 |
+| `rules[].levels[].rearm.extra` | `float` | 否 | 重新布防线 = min(阈值, 重置时的值 − extra)，按越线方向取 | `0.01` | 即时 |
+| `rules[].overrides` | `dict[str, dict[str, dict[str, any]]]` | 否 | 按账户覆盖：账户 ID → 级别名 → 要覆盖的级别字段，例如 `{ACC2: {halt: {threshold: -0.04}}}` | `{}` | 即时 |
+| `pretrade` | 对象 | 否 | 事前检查参数（01 §5.3.1、02 §11.2） | 见子字段 | 即时 |
+| `pretrade.fat_finger_ticks` | `int` | 否 | 限价偏离最新价超过该 tick 数即拒单（与 `fat_finger_pct` 取较宽者） | `50` | 即时 |
+| `pretrade.fat_finger_pct` | `float` | 否 | 限价偏离最新价超过该比例即拒单 | `0.03` | 即时 |
+| `pretrade.funds_buffer` | `float` | 否 | 资金检查预留的缓冲比例：开仓后可用资金须不低于权益 × 该值 | `0.05` | 即时 |
+| `pretrade.throttle_rate_per_s` | `float` | 否 | 每个账户的报单速率上限（笔/秒，令牌桶） | `20` | 即时 |
+| `pretrade.throttle_burst` | `int` | 否 | 令牌桶容量（允许的突发笔数） | `40` | 即时 |
+| `pretrade.route_ttl_ms` | `int` | 否 | 通过风控后路由的有效期（毫秒）：超过 `expire_ns` 的路由被 trade-gateway 拒绝并写墓碑 | `2000` | 即时 |
+| `pretrade.default_max_order_qty` | `int` | 否 | `products.yaml` 没有配置 `max_order_qty` 时的单笔最大手数 | `1000` | 即时 |
+| `system` | 对象 | 否 | 风控核心的系统参数 | 见子字段 | 即时 |
+| `system.snapshot_hz` | `float` | 否 | 账户快照 `risk.snapshot.{account_id}` 的最高发布频率（Hz）；另外每秒至少发一次保活 | `2` | 即时 |
+| `system.metric_sample_s` | `float` | 否 | 账户指标采样周期（秒），写入 `metric_samples`，供日内曲线和日报使用 | `1` | 即时 |
+| `system.md_unknown_account_block_pct` | `float` | 否 | 账户敞口中行情质量为 UNKNOWN 的比例超过该值时，整个账户禁开 | `0.5` | 即时 |
+| `system.recon_interval_s` | `int` | 否 | 盘中与柜台做持仓对账的周期（秒） | `300` | 即时 |
+| `system.recon_quiet_s` | `int` | 否 | 对账前要求该账户最近没有成交和在途委托的静默秒数 | `5` | 即时 |
+| `system.quality_stale_tolerance` | `float` | 否 | 账户范围规则的行情质量门控容忍度：质量不是 OK 的持仓合约占账户总名义敞口不超过该比例时，账户质量仍按 OK 处理（这些合约按最后已知价格估值）；超过时取最差的质量，状态机保持不动。0 表示不容忍 | `0.1` | 即时 |
+<!-- gen:risk_rules end -->
+
+### 6.2 可用的指标
+
+`rules[].metric` 必须是下表中的名字（由 `@register_metric` 注册，用错时热加载在 prepare 阶段被否决）。`account.*` 对应 02 §7.6 `AccountFunds` / `AccountMetricsView` 的同名字段，`product.*` 对应 `ExposureView`，`sector.*` 为板块汇总；各指标的定义见 04 §3。
+
+<!-- gen:metrics begin -->
+| 指标类别 | 可用于的 `scope` | 指标名 = 前缀 + 字段 |
+|---|---|---|
+| `account` | `account` | 前缀 `account.`，字段：`available`、`cancels_today`、`close_pnl`、`compliance_util`、`cum_net_deposit`、`daily_pnl`、`daily_pnl_pct_init`（分母 `initial_capital`）、`daily_pnl_pct_sod`（分母 `static_equity`）、`effective_n`、`equity`、`fee`、`floating_pnl_pct_init`（分母 `initial_capital`）、`frozen_fee`、`frozen_margin`、`gross_notional`、`hwm_dd`、`hwm_equity`、`initial_capital`、`intraday_dd`、`intraday_peak_equity`、`leverage`、`limit_stress`、`margin`、`nav`（分母 `initial_capital`）、`net_deposit`、`net_notional`、`orders_today`、`perf_equity`、`position_pnl`、`pre_balance`、`risk_degree`、`static_equity` |
+| `product` | `account/product`、`firm/product` | 前缀 `product.`，字段：`gross_notional`、`gross_pct_equity`、`long_lots`、`net_lots`、`net_notional`、`net_pct_equity`、`short_lots`、`utilization` |
+| `sector` | `account/sector`、`firm/sector` | 前缀 `sector.`，字段：`gross_notional`、`gross_pct_equity`、`net_notional`、`net_pct_equity` |
+| `firm` | `firm` | 前缀 `firm.`，字段：`available`、`cancels_today`、`close_pnl`、`cum_net_deposit`、`daily_pnl`、`daily_pnl_pct_init`、`daily_pnl_pct_sod`、`effective_n`、`equity`、`fee`、`floating_pnl_pct_init`、`frozen_fee`、`frozen_margin`、`gross_notional`、`hwm_dd`、`hwm_equity`、`initial_capital`、`intraday_dd`、`intraday_peak_equity`、`leverage`、`limit_stress`、`margin`、`nav`、`net_deposit`、`net_notional`、`orders_today`、`perf_equity`、`position_pnl`、`pre_balance`、`risk_degree`、`static_equity` |
+<!-- gen:metrics end -->
+
+### 6.3 动作参数（`levels[].params`）
+
+| 动作 | 参数 | 类型 | 说明 |
+|---|---|---|---|
+| `RESTRICT` | `max_order_factor` | 小数 | 单笔上限系数：单笔最大手数 × 该值 |
+| `RESTRICT` | `no_add_to_losers` | 布尔 | 禁止在亏损品种上加仓（`REJECT_ADD_TO_LOSER`） |
+| `RESTRICT` | `exposure_cap_factor` | 小数 | 敞口上限系数：开仓使品种 \|净名义\| 增大、且开仓后 \|净名义\| ÷ 权益超过（3% ÷ 涨跌停幅度）× 该值时拒绝（`REJECT_EXPOSURE_CAP`） |
+| `RESTRICT` | `block_open` | 布尔 | 在规则范围（账户、品种、板块）内禁开 |
+| `RESTRICT` | `block_open_largest_product` | 布尔 | 只在 \|净名义\| 最大的品种上禁开（集中度规则使用） |
+| `LIQUIDATE` | `step` | 小数 | 减仓计划对每个持仓平掉的比例（向上取整，至少 1 手，亏损的持仓排在前面），默认 0.5 |
+| `LIQUIDATE` | `price_ticks` | 整数 | 建议价格为"对手价 ± N 跳"中的 N，默认 2 |
+
+`ALERT` 和 `CIRCUIT_BREAK` 没有参数；熔断的确认和锁存由 `confirm`、`latch`、`rearm` 控制。限制的作用范围和对应的拒单码见 04 §7.2。
+
+### 6.4 示例
+
+```yaml
+rules:
+  - id: daily_loss
+    metric: account.daily_pnl_pct_init   # floating_only 口径：account.floating_pnl_pct_init
+    op: "<="
+    scope: account
+    hysteresis: 0.2
+    cooldown_s: 60
+    pretrade: true
+    levels:
+      - {name: warn, threshold: -0.020, action: ALERT}
+      - {name: restrict, threshold: -0.025, action: RESTRICT, params: {max_order_factor: 0.5, no_add_to_losers: true}}
+      - {name: halt, threshold: -0.030, action: CIRCUIT_BREAK, latch: true, confirm: {states: 2, ms: 1000}, rearm: {extra: 0.01}}
+      - {name: derisk, threshold: -0.050, action: LIQUIDATE, params: {step: 0.5}}
+    overrides:
+      ACC2: {halt: {threshold: -0.040}}   # ACC2 的熔断线放宽到 -4%
+pretrade: {fat_finger_ticks: 50, fat_finger_pct: 0.03, funds_buffer: 0.05, throttle_rate_per_s: 20, throttle_burst: 40, route_ttl_ms: 2000}
+system: {snapshot_hz: 2.0, metric_sample_s: 1.0, md_unknown_account_block_pct: 0.5, recon_interval_s: 300, recon_quiet_s: 5}
+```
+
+- 热加载**不会解除已经锁存的熔断**：被删除或放宽的规则上仍然锁存的级别保持到 `risk.reset` 或换日（04 §6.8）。
+
+## 7. feeds.yaml
+
+行情源和多源仲裁参数（01 §8.13）。md-gateway 只在启动时建立数据源，所以数据源各段的任何改动都会被否决；`arbitration` 段可以即时生效。
+
+<!-- gen:feeds begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `feed_a` | 对象 | 否 | Feed A：CTP 风格的 WebSocket 推送源（02 §9.1） | 见子字段 | 拒绝热改 |
+| `feed_a.enabled` | `bool` | 否 | 是否接入 | `true` | 拒绝热改 |
+| `feed_a.url` | `str` | 否 | WebSocket 地址 | `ws://127.0.0.1:7001/feed` | 拒绝热改 |
+| `feed_a.priority` | `int` | 否 | 优先级（数字小者优先），用于自举和平局时的选择 | `1` | 拒绝热改 |
+| `feed_a.reconnect_backoff_ms` | `list[int]` | 否 | 断线重连的退避序列（毫秒），用完后重复最后一个值 | `[200, 500, 1000, 2000, 5000]` | 拒绝热改 |
+| `feed_b` | 对象 | 否 | Feed B：厂商风格的 REST 轮询源（02 §9.2） | 见子字段 | 拒绝热改 |
+| `feed_b.enabled` | `bool` | 否 | 是否接入 | `true` | 拒绝热改 |
+| `feed_b.url` | `str` | 否 | 轮询地址 | `http://127.0.0.1:7002/v1/quotes` | 拒绝热改 |
+| `feed_b.poll_ms` | `int` | 否 | 轮询周期（毫秒）；上一次未完成时跳过本次 | `1000` | 拒绝热改 |
+| `feed_b.timeout_ms` | `int` | 否 | 单次请求超时（毫秒） | `800` | 拒绝热改 |
+| `feed_b.priority` | `int` | 否 | 优先级 | `2` | 拒绝热改 |
+| `sina` | 对象 | 否 | 新浪期货行情（02 §9.3），live 档使用；sim 档必须关闭（两边价格不是同一个市场） | 见子字段 | 拒绝热改 |
+| `sina.enabled` | `bool` | 否 | 是否接入（md-gateway） | `false` | 拒绝热改 |
+| `sina.url` | `str` | 否 | 请求地址前缀，合约代码拼在后面 | `https://hq.sinajs.cn/list=` | 拒绝热改 |
+| `sina.referer` | `str` | 否 | 请求头 Referer（新浪要求） | `https://finance.sina.com.cn` | 拒绝热改 |
+| `sina.poll_ms` | `int` | 否 | 轮询周期（毫秒），不应小于 1000 | `1500` | 拒绝热改 |
+| `sina.timeout_ms` | `int` | 否 | 单次请求超时（毫秒） | `1200` | 拒绝热改 |
+| `sina.priority` | `int` | 否 | 优先级 | `3` | 拒绝热改 |
+| `sina.trust_env` | `bool` | 否 | 是否使用环境变量 `HTTP(S)_PROXY` 中的代理 | `false` | 拒绝热改 |
+| `sina.symbols` | `dict[str, str]` | 否 | 合约代码 → 新浪代码（如 `rb2701: nf_RB2701`，`IF2612: CFF_RE_IF2612`）；`futrisk data record` 也按它录制 | `{}` | 拒绝热改 |
+| `arbitration` | 对象 | 否 | 多源仲裁参数（01 §8.13） | 见子字段 | 即时 |
+| `arbitration.exclude_missed_heartbeats` | `int` | 否 | Feed A 连续丢失该数量的心跳即排除（EXCLUDED） | `3` | 即时 |
+| `arbitration.exclude_failed_polls` | `int` | 否 | 轮询源连续失败该次数即排除 | `3` | 即时 |
+| `arbitration.exclude_reject_rate` | `float` | 否 | 最近 1 分钟的拒收率超过该值即排除 | `0.05` | 即时 |
+| `arbitration.exclude_integrity_votes` | `int` | 否 | 被交叉校验投票该次数即排除 | `2` | 即时 |
+| `arbitration.probation_healthy_s` | `float` | 否 | 观察期（PROBATION）内健康满该秒数，才可能恢复可信 | `10` | 即时 |
+| `arbitration.probation_agree_count` | `int` | 否 | 恢复可信还需要与可信源同成交量一致的次数 | `3` | 即时 |
+| `arbitration.min_dwell_s` | `float` | 否 | 每个可信状态最少停留的秒数（防抖） | `5` | 即时 |
+| `arbitration.flapping_window_s` | `float` | 否 | 抖动检测的时间窗（秒） | `300` | 即时 |
+| `arbitration.flapping_max_switches` | `int` | 否 | 时间窗内切换超过该次数时告警 `MD_FLAPPING` | `4` | 即时 |
+| `arbitration.reorder_buffer_max` | `int` | 否 | Feed A 乱序缓冲的最大条数 | `32` | 即时 |
+| `arbitration.reorder_buffer_ms` | `int` | 否 | Feed A 乱序缓冲的最长等待（毫秒） | `100` | 即时 |
+| `arbitration.spike_confirm_ms` | `int` | 否 | 尖刺隔离：等待确认的时限（毫秒），超时未确认即丢弃 | `2000` | 即时 |
+| `arbitration.spike_ticks` | `int` | 否 | 尖刺阈值的下限：max(spike_ticks × tick, spike_z × σ × √Δt × 价格)，上限为涨跌停带宽的 1/4 | `10` | 即时 |
+| `arbitration.spike_z` | `float` | 否 | 尖刺阈值中波动率的倍数 | `6` | 即时 |
+| `arbitration.stale_s` | `float` | 否 | 连续交易时段内没有可信源满该秒数，合约质量标为 STALE（禁开） | `5` | 即时 |
+| `arbitration.unknown_s` | `float` | 否 | 满该秒数标为 UNKNOWN | `30` | 即时 |
+| `arbitration.open_grace_s` | `float` | 否 | 开盘后的宽限秒数，期间不判定陈旧 | `30` | 即时 |
+| `arbitration.live_max_latency_ms` | `int` | 否 | 接收时间与交易所时间相差超过该毫秒数（双向）的行情不算 LIVE | `3000` | 即时 |
+| `arbitration.watermark_flush_s` | `float` | 否 | 仲裁水位写入 md.db 的周期（秒） | `1` | 即时 |
+<!-- gen:feeds end -->
+
+示例（打开新浪作为第三个源，只适用于真实行情部署；sim 档打开会与模拟价格持续冲突）：
+
+```yaml
+sina:
+  enabled: true
+  poll_ms: 1500
+  symbols: {rb2701: nf_RB2701, IF2612: CFF_RE_IF2612}
+```
+
+## 8. sim.yaml
+
+虚拟交易所 sim-exchange 的参数：价格引擎、Feed A/B、模拟柜台和控制接口（02 §9.1–9.5）。
+
+<!-- gen:sim begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `price_engine` | 对象 | 否 | 价格引擎：相关的 GBM 加跳跃过程，价格按 tick 对齐并受涨跌停约束（01 §8.13） | 见子字段 | 重启 sim-exchange |
+| `price_engine.seed` | `int` | 否 | 随机种子；同一种子重现同一条价格路径 | `20260928` | 重启 sim-exchange |
+| `price_engine.tick_interval_ms` | `int` | 否 | 每个合约产生一个新行情状态的间隔（毫秒），只在连续交易时段内产生 | `500` | 重启 sim-exchange |
+| `price_engine.sector_correlation` | `float` | 否 | 同板块品种之间的相关系数 | `0.6` | 重启 sim-exchange |
+| `price_engine.market_correlation` | `float` | 否 | 全市场公共因子的相关系数 | `0.2` | 重启 sim-exchange |
+| `price_engine.instruments` | {instrument_id: 对象} | 否 | 模拟的合约，键为合约代码（须在 `products.yaml` 中） | `{}` | 重启 sim-exchange |
+| `price_engine.instruments.{instrument_id}.pre_settle` | `decimal` | 是 | 昨结算价：价格路径的初值；`futrisk demo` 首日建账也把它作为昨结算 | — | 重启 sim-exchange |
+| `price_engine.instruments.{instrument_id}.vol_annual` | `float` | 否 | 年化波动率 | `0.2` | 重启 sim-exchange |
+| `price_engine.instruments.{instrument_id}.jump_intensity_per_day` | `float` | 否 | 每个交易日跳跃次数的期望 | `0.5` | 重启 sim-exchange |
+| `price_engine.instruments.{instrument_id}.jump_sigma` | `float` | 否 | 单次跳跃幅度的标准差（对数收益） | `0.01` | 重启 sim-exchange |
+| `price_engine.instruments.{instrument_id}.volume_per_s` | `float` | 否 | 平均每秒成交量（手） | `5` | 重启 sim-exchange |
+| `price_engine.instruments.{instrument_id}.open_interest` | `int` | 否 | 初始持仓量（手） | `100000` | 重启 sim-exchange |
+| `feed_a` | 对象 | 否 | Feed A 服务端（WebSocket） | 见子字段 | 重启 sim-exchange |
+| `feed_a.host` | `str` | 否 | 监听地址 | `127.0.0.1` | 重启 sim-exchange |
+| `feed_a.port` | `int` | 否 | 监听端口 | `7001` | 重启 sim-exchange |
+| `feed_a.ring_size` | `int` | 否 | 重放环形缓冲的容量（条）；缺口早于环形缓冲时只能用快照补齐 | `100000` | 重启 sim-exchange |
+| `feed_a.heartbeat_ms` | `int` | 否 | 心跳间隔（毫秒） | `1000` | 重启 sim-exchange |
+| `feed_b` | 对象 | 否 | Feed B 服务端（HTTP），同时提供健康检查 `GET /v1/health` | 见子字段 | 重启 sim-exchange |
+| `feed_b.host` | `str` | 否 | 监听地址 | `127.0.0.1` | 重启 sim-exchange |
+| `feed_b.port` | `int` | 否 | 监听端口 | `7002` | 重启 sim-exchange |
+| `broker` | 对象 | 否 | SimBroker 模拟柜台（02 §9.4） | 见子字段 | 见子字段 |
+| `broker.endpoint` | `str` | 否 | ZeroMQ ROUTER 端点，trade-gateway 连接它 | `tcp://127.0.0.1:7003` | 重启 sim-exchange、trade-gateway |
+| `broker.front_id` | `int` | 否 | 前置编号（仿 CTP 的 FrontID） | `1` | 重启 sim-exchange |
+| `broker.ack_delay_ms` | `int` | 否 | 委托确认的模拟延迟（毫秒） | `5` | 重启 sim-exchange |
+| `broker.fill_delay_ms` | `int` | 否 | 成交回报的模拟延迟（毫秒） | `20` | 重启 sim-exchange |
+| `control` | 对象 | 否 | 控制接口（02 §9.5），只在 `app.mode=demo` 时开放 | 见子字段 | 重启 sim-exchange |
+| `control.host` | `str` | 否 | 监听地址 | `127.0.0.1` | 重启 sim-exchange |
+| `control.port` | `int` | 否 | 监听端口 | `7004` | 重启 sim-exchange |
+<!-- gen:sim end -->
+
+- 端口改动还要同步 `feeds.yaml` 的 `feed_a.url`、`feed_b.url`（数据源改动拒绝热改，要离线提交，08 §4.5）；`broker.endpoint` 同时是 trade-gateway 连接的地址，trade-gateway 也要重启。
+
+## 9. scenarios/*.yaml
+
+sim-exchange 的场景剧本：按时间表施加价格冲击和故障。自带 `breaker`（熔断验收）、`feed_outage`（Feed A 中断与补数）、`all_feeds_outage`（全部行情源中断）。
+
+### 9.1 字段
+
+<!-- gen:scenario begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `name` | `str` | 是 | 剧本名，与文件名一致（1~64 个字母、数字、`_`、`-`），`futrisk scenario run <name>` 使用 | — | 每次运行时读取 |
+| `description` | `str` | 否 | 说明，`futrisk scenario list` 和仪表盘显示 | `""` | 每次运行时读取 |
+| `vars` | `dict[str, any]` | 否 | 变量及默认值；步骤中整值为 `${var}` 时按原类型替换，嵌在字符串中时按文本替换；运行时可用 `--var KEY=VALUE` 覆盖 | `{}` | 每次运行时读取 |
+| `steps` | 对象列表 | 是 | 步骤列表，按 `at_s` 顺序执行 | — | 每次运行时读取 |
+| `steps[].at_s` | `float` | 否 | 相对剧本开始的秒数；`--speed 2` 时减半 | `0` | 每次运行时读取 |
+| `steps[].action` | `shock` \| `fault` \| `clear_fault` \| `clear_faults` \| `pause` \| `resume` \| `log` | 是 | 动作：`shock` 价格冲击、`fault` 注入故障、`clear_fault` 撤销（按 `ref`）、`clear_faults` 撤销全部、`pause` / `resume` 暂停和恢复行情、`log` 只记日志 | — | 每次运行时读取 |
+| `steps[].params` | `dict[str, any]` | 否 | 动作参数，见本文 §9.2 | `{}` | 每次运行时读取 |
+| `steps[].ref` | `str` \| `null` | 否 | 给 `fault` 步骤起的名字，供后面的 `clear_fault` 引用 | `null` | 每次运行时读取 |
+| `steps[].note` | `str` \| `null` | 否 | `log` 步骤的文字 | `null` | 每次运行时读取 |
+<!-- gen:scenario end -->
+
+- 剧本从 sim-exchange 启动时加载的配置版本目录（`<home>/config/versions/<N>/scenarios/`）读取，找不到时再找包内默认目录。新增或修改剧本要热加载提交并重启 sim-exchange。
+
+### 9.2 各动作的参数
+
+| 动作 | 参数 | 说明 |
+|---|---|---|
+| `shock` | `sector` 或 `instruments`（二选一）、`pct`、`duration_s`、`shape` | 板块（`black`、`nonferrous`、`precious`、`agri`、`equity_index`、`rates`）或合约列表的价格冲击；`pct` 为比率（−0.03 为 −3%）；`shape` 为 `STEP`（一步到位）或 `LINEAR`（在 `duration_s` 内线性走完） |
+| `fault` | `type`、`target`、`params`、`duration_s` | 注入故障，类型和参数见下表；`duration_s` 缺省时持续到撤销（一次性故障自行结束） |
+| `clear_fault` | `ref` | 撤销此前 `ref` 命名的故障 |
+| `clear_faults` | — | 撤销本剧本注入的全部故障 |
+| `pause` / `resume` | — | 暂停 / 恢复行情推送 |
+| `log` | —（用 `note`） | 只在剧本日志中记一句 |
+
+故障类型（与 `futrisk fault inject` 相同，02 §9.5）：
+
+| `type` | `target` | `params` | 效果 |
+|---|---|---|---|
+| `FEED_DISCONNECT` | `feed_a` / `feed_b` | `refuse_reconnect_s`、`mode`（`close` / `silent`，仅 Feed A） | 断开连接（或静默不发，靠丢失心跳发现），期间拒绝重连；Feed B 返回 503 |
+| `FEED_GAP` | `feed_a` | `drop_count` | 接下来 N 条行情不发送（仍在重放环形缓冲中，可补回） |
+| `FEED_DUPLICATE` | 任一源 | `ratio` | 按比例重复发送 |
+| `FEED_REORDER` | 任一源 | `window` | 在窗口内打乱顺序 |
+| `FEED_LATENCY` | 任一源 | `ms` | 每条消息延迟 N 毫秒 |
+| `FEED_FREEZE` | 不填 / 任一源 | `instrument` | 不填：该合约停止交易；填源：该源停止更新该合约 |
+| `BAD_TICK` | 不填 / 任一源 | `instrument`、`offset_pct`、`with_volume` | 发一笔偏离的坏价（在 tick 网格上、不受涨跌停约束） |
+| `MALFORMED` | `feed_b` | `ratio`、`mode`（`body` / `record`） | 截断的 JSON，或一条价格为 `"N/A"` 的记录 |
+| `SIM_RESTART` | — | — | 模拟交易所重启：Feed A 换 epoch、清空环形缓冲、断开柜台会话 |
+| `BROKER_FORCE_CLOSE` | — | `account_id`、`instrument_id`、`qty`、`posi_direction` | 柜台强平：以对手价生成一笔外部成交 |
+| `BROKER_DISCONNECT` | — | `seconds` | 柜台断线 N 秒 |
+
+### 9.3 示例
+
+```yaml
+name: feed_outage
+description: Feed A 中断 20s 后恢复，再制造一次跳号、重复和乱序
+vars: {outage_s: 20, gap_ticks: 15}
+steps:
+  - {at_s: 0, action: log, note: "Feed A down for ${outage_s}s"}
+  - {at_s: 0, action: fault, ref: feed_a_down,
+     params: {type: FEED_DISCONNECT, target: feed_a, params: {refuse_reconnect_s: "${outage_s}"}}}
+  - {at_s: 45, action: fault, params: {type: FEED_GAP, target: feed_a, params: {drop_count: "${gap_ticks}"}}}
+  - {at_s: 60, action: fault, params: {type: FEED_DUPLICATE, target: feed_a, params: {ratio: 0.2}, duration_s: 15}}
+```
+
+运行：`futrisk scenario run feed_outage --var outage_s=30 --speed 2`（07 §4.6）。
+
+## 10. backtest/*.yaml
+
+回测配置（01 §8.16；方法与结果见 10 文档）。
+
+### 10.1 字段
+
+<!-- gen:backtest begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `name` | `str` | 是 | 回测名，默认取文件名；输出目录为 `<home>/backtests/<name>-<时间戳>` | — | 每次运行时读取 |
+| `description` | `str` | 否 | 说明，`futrisk backtest list` 显示第一行 | `""` | 每次运行时读取 |
+| `kind` | `arms` \| `stress` \| `sweep` \| `scenario` | 否 | 类型：`arms` 配对实验；`stress` 每个压力窗口单独运行；`sweep` 阈值 × 动作档位扫描；`scenario` D 层合成剧本（精确断言） | `arms` | 每次运行时读取 |
+| `layer` | `A` \| `B` \| `C` \| `D` | 否 | 数据层：`A` 逐合约日线（2015 年至今）；`B` 新浪分钟线；`C` 自录 tick；`D` 合成剧本（01 §8.16） | `A` | 每次运行时读取 |
+| `start` | `str` \| `null` | 否 | 起始交易日（YYYYMMDD）；`null` 为数据的第一天 | `null` | 每次运行时读取 |
+| `end` | `str` \| `null` | 否 | 结束交易日；`null` 为数据的最后一天 | `null` | 每次运行时读取 |
+| `products` | `list[str]` | 否 | 参与回测的品种 | `[rb, hc, cu, au, i, j, m, IF, IH, IC, IM, T]` | 每次运行时读取 |
+| `accounts` | {account_id: 对象} | 否 | 回测账户，键为账户 ID | `{}` | 每次运行时读取 |
+| `accounts.{account_id}.strategy` | `str` | 是 | 策略名（同 `accounts.yaml` 的 `strategy`） | — | 每次运行时读取 |
+| `accounts.{account_id}.products` | `list[str]` \| `null` | 否 | 策略交易的品种；`null` 取 `accounts.yaml` 的 `products` | `null` | 每次运行时读取 |
+| `accounts.{account_id}.params` | `dict[str, any]` | 否 | 策略参数（由策略自己的模型校验） | `{}` | 每次运行时读取 |
+| `accounts.{account_id}.capital` | `decimal` \| `null` | 否 | 初始资金；`null` 取 `accounts.yaml` 的 `initial_capital` | `null` | 每次运行时读取 |
+| `accounts.{account_id}.enabled` | `bool` | 否 | `false` 时不参与 | `true` | 每次运行时读取 |
+| `accounts.{account_id}.role` | `book` \| `control` | 否 | `book` 计入 TOTAL；`control` 在每个方案中回放但单独报告（对照组） | `book` | 每次运行时读取 |
+| `accounts.{account_id}.title` | `str` | 否 | 报告中的显示名 | `""` | 每次运行时读取 |
+| `arms` | 对象列表 | 否 | 实验方案，名字唯一 | `[{name: no_rules, tier: none, threshold: null, placebo_of: null}, {name: alert_only, tier: alert_only, threshold: null, placebo_of: null}, {name: block_open, tier: block_open, threshold: null, placebo_of: null}, {name: halve, tier: halve, threshold: null, placebo_of: null}, {name: flatten, tier: flatten, threshold: null, placebo_of: null}]` | 每次运行时读取 |
+| `arms[].name` | `str` | 是 | 方案名 | — | 每次运行时读取 |
+| `arms[].tier` | `none` \| `alert_only` \| `block_open` \| `halt_only` \| `halve` \| `flatten` \| `placebo` \| `production` | 否 | 动作档位：`none` 无规则；`alert_only` 只告警；`block_open` 生产规则（熔断禁开）；`halt_only` 只有熔断；`halve` / `flatten` 锁存时再减仓 50% / 100%；`placebo` 安慰剂；`production` 全部生产规则 | `block_open` | 每次运行时读取 |
+| `arms[].threshold` | `float` \| `null` | 否 | 熔断阈值（正数，占初始资金的比例）；`null` 取 `rules.threshold` | `null` | 每次运行时读取 |
+| `arms[].placebo_of` | `str` \| `null` | 否 | `placebo` 方案引用的方案名：在熔断没有触发的随机日子重复它的动作 | `null` | 每次运行时读取 |
+| `rules` | 对象 | 否 | 日亏损规则在各方案中的实例化方式 | 见子字段 | 每次运行时读取 |
+| `rules.threshold` | `float` | 否 | 熔断阈值（正数），默认 3% | `0.03` | 每次运行时读取 |
+| `rules.ladder` | `dict[str, float]` | 否 | 各级别相对熔断阈值的倍数：告警 2/3、限制 5/6、熔断 1、减仓 5/3 | `{warn: 0.666667, restrict: 0.833333, halt: 1, derisk: 1.66667}` | 每次运行时读取 |
+| `rules.include_other_rules` | `bool` | 否 | 是否在每个有规则的方案中加入其他生产规则（`production` 档位总是包含） | `false` | 每次运行时读取 |
+| `rules.reduce_step` | `dict[str, float]` | 否 | `halve` / `flatten` 锁存时平仓的比例 | `{halve: 0.5, flatten: 1}` | 每次运行时读取 |
+| `path` | 对象 | 否 | A 层日内路径的合成方式（01 §8.16） | 见子字段 | 每次运行时读取 |
+| `path.rule` | `open_near_extreme` \| `high_first` \| `low_first` | 否 | 极值顺序：`open_near_extreme` 开盘价靠近哪个极值先走哪个；`high_first`；`low_first` | `open_near_extreme` | 每次运行时读取 |
+| `path.points_per_leg` | `int` | 否 | 每一段（开→极值 1→极值 2→收）至少的价格点数 | `4` | 每次运行时读取 |
+| `path.max_step` | `float` | 否 | 自适应加密：每步最大涨跌幅（相对开盘价），0 表示固定点数 | `0.0025` | 每次运行时读取 |
+| `path.max_points_per_leg` | `int` | 否 | 每段最多的价格点数 | `80` | 每次运行时读取 |
+| `ensemble` | 对象 | 否 | 路径集合：用校准的随机路径模型代替确定路径 | 见子字段 | 每次运行时读取 |
+| `ensemble.paths` | `int` | 否 | 随机路径的条数 K；0 表示用 `path.rule` 的确定路径 | `0` | 每次运行时读取 |
+| `ensemble.calibration_period` | `int` | 否 | 校准极值时间和振荡幅度所用的分钟线周期 | `15` | 每次运行时读取 |
+| `ensemble.order_period` | `int` | 否 | 估计先到哪个极值的概率所用的分钟线周期 | `60` | 每次运行时读取 |
+| `ensemble.check_periods` | `list[int]` | 否 | 报告振荡拟合优度的周期 | `[5, 60]` | 每次运行时读取 |
+| `ensemble.grid_s` | `float` | 否 | 细路径的时间分辨率（交易时间秒） | `60` | 每次运行时读取 |
+| `ensemble.shrink_days` | `int` | 否 | 品种级顺序概率向合并估计收缩的伪天数 | `20` | 每次运行时读取 |
+| `ensemble.min_days` | `int` | 否 | 品种级校准至少需要的天数，不足时按时段形态合并 | `20` | 每次运行时读取 |
+| `ensemble.sigma` | `float` \| `null` | 否 | 固定振荡幅度（敏感性分析），`null` 用校准值 | `null` | 每次运行时读取 |
+| `ensemble.rho` | `float` \| `null` | 否 | 固定板块内相关（敏感性分析），`null` 用校准值 | `null` | 每次运行时读取 |
+| `ensemble.bootstrap` | `int` | 否 | 路径 × 日块联合 bootstrap 的次数 | `2000` | 每次运行时读取 |
+| `sensitivity` | 对象列表 | 否 | 敏感性变体：在本配置上叠加点号覆盖后重跑，与主结果并列报告 | `[]` | 每次运行时读取 |
+| `sensitivity[].name` | `str` | 是 | 变体名（唯一） | — | 每次运行时读取 |
+| `sensitivity[].title` | `str` | 否 | 报告中的标题 | `""` | 每次运行时读取 |
+| `sensitivity[].set` | `dict[str, any]` | 否 | 点号覆盖，如 `{path.rule: low_first}` | `{}` | 每次运行时读取 |
+| `sensitivity[].paths` | `int` \| `null` | 否 | 变体的随机路径条数；`null` 为确定路径 | `null` | 每次运行时读取 |
+| `sensitivity[].arms` | `list[str]` \| `null` | 否 | 变体要跑的方案名；`null` 为全部非安慰剂方案 | `null` | 每次运行时读取 |
+| `data` | 对象 | 否 | 数据位置 | 见子字段 | 每次运行时读取 |
+| `data.dir` | `str` \| `null` | 否 | 历史数据目录；相对路径相对应用目录（exe 所在目录，或源码仓库根目录）；`null` 为 `data/hist` | `null` | 每次运行时读取 |
+| `data.minute_period` | `int` | 否 | B 层分钟线周期：5、15 或 60 | `60` | 每次运行时读取 |
+| `data.minute_window` | `int` \| `null` | 否 | A 层只回放该周期分钟线文件共同覆盖的交易日（与 B 层在相同的日子上对照）；`null` 为日线的全部交易日 | `null` | 每次运行时读取 |
+| `data.ticks_home` | `str` \| `null` | 否 | C 层 tick 所在的 home（含 `ticks/raw/<td>/sina`）；`null` 为当前 home | `null` | 每次运行时读取 |
+| `data.tick_days` | `list[str]` | 否 | C 层回放的交易日；空表示全部已录制的交易日 | `[]` | 每次运行时读取 |
+| `analysis` | 对象 | 否 | 统计分析选项 | 见子字段 | 每次运行时读取 |
+| `analysis.horizons` | `list[int]` | 否 | 效果观察期（交易日）：d..d+h | `[0, 1, 5]` | 每次运行时读取 |
+| `analysis.bootstrap_samples` | `int` | 否 | 配对块 bootstrap 的抽样次数 | `1000` | 每次运行时读取 |
+| `analysis.bootstrap_block` | `int` | 否 | 块长度（交易日） | `20` | 每次运行时读取 |
+| `analysis.exclude_roll_days` | `bool` | 否 | 换月日不计入真假阳性统计（单独计数） | `true` | 每次运行时读取 |
+| `analysis.focus_days` | `list[str]` | 否 | 保留日内路径的交易日 | `[]` | 每次运行时读取 |
+| `analysis.intraday_trigger_days` | `int` | 否 | 最多保留多少个触发日的日内路径 | `40` | 每次运行时读取 |
+| `analysis.hit_rate` | `bool` | 否 | 是否用分钟线统计"开盘价靠近极值"规则的命中率 | `true` | 每次运行时读取 |
+| `analysis.bounding` | `bool` | 否 | 是否对静态持仓做必然 / 不确定 / 不可能触发的界定分类 | `true` | 每次运行时读取 |
+| `analysis.primary_basis` | `close` \| `settle` \| `open` | 否 | 衡量效果的价格口径：`close` 收盘价（主口径）、`settle` 结算价、`open` 次日开盘价 | `close` | 每次运行时读取 |
+| `analysis.primary_horizon` | `int` | 否 | 主观察期 h（d..d+h） | `1` | 每次运行时读取 |
+| `analysis.leave_one_out` | `bool` | 否 | 逐年、逐压力窗口剔除后重算效果 | `true` | 每次运行时读取 |
+| `analysis.multiplicity` | `holm` \| `bh` | 否 | 多账户 p 值的校正方法：`holm` 或 `bh` | `holm` | 每次运行时读取 |
+| `stress` | 对象 \| `null` | 否 | 压力窗口（`kind=stress` 时每个窗口单独运行；`arms` 时从全期结果中切片） | `null` | 每次运行时读取 |
+| `stress.windows` | 对象列表 | 否 | 窗口列表 | `[]` | 每次运行时读取 |
+| `stress.windows[].id` | `str` | 是 | 窗口 ID | — | 每次运行时读取 |
+| `stress.windows[].title` | `str` | 是 | 标题 | — | 每次运行时读取 |
+| `stress.windows[].start` | `str` \| `null` | 否 | 起始交易日 | `null` | 每次运行时读取 |
+| `stress.windows[].end` | `str` \| `null` | 否 | 结束交易日 | `null` | 每次运行时读取 |
+| `stress.windows[].focus_day` | `str` \| `null` | 否 | 重点日（保留日内路径） | `null` | 每次运行时读取 |
+| `stress.windows[].products` | `list[str]` | 否 | 窗口关注的品种 | `[]` | 每次运行时读取 |
+| `stress.windows[].note` | `str` | 否 | 备注 | `""` | 每次运行时读取 |
+| `stress.windows[].auto` | `largest_drops` \| `null` | 否 | 自动选日：`largest_drops` 取 `auto_product` 跌幅最大的 `top_n` 天 | `null` | 每次运行时读取 |
+| `stress.windows[].auto_product` | `str` \| `null` | 否 | 自动选日所用的品种 | `null` | 每次运行时读取 |
+| `stress.windows[].top_n` | `int` | 否 | 自动选取的天数 | `3` | 每次运行时读取 |
+| `stress.windows[].pad_days` | `int` | 否 | 自动选取日前后各加的交易日数 | `5` | 每次运行时读取 |
+| `stress.skipped` | `list[dict[str, str]]` | 否 | 跳过的窗口及原因（只写进报告） | `[]` | 每次运行时读取 |
+| `stress.warmup_days` | `int` | 否 | 窗口前用于指标预热的交易日数（不交易） | `80` | 每次运行时读取 |
+| `sweep` | 对象 \| `null` | 否 | 参数扫描（`kind=sweep`） | `null` | 每次运行时读取 |
+| `sweep.thresholds` | `list[float]` | 否 | 扫描的熔断阈值 | `[0.0075, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]` | 每次运行时读取 |
+| `sweep.tiers` | list[`none` \| `alert_only` \| `block_open` \| `halt_only` \| `halve` \| `flatten` \| `placebo` \| `production`] | 否 | 扫描的动作档位 | `[alert_only, block_open, halve, flatten]` | 每次运行时读取 |
+| `sweep.periods` | dict[str, list[`str` \| `null`]] | 否 | 样本期：名称 → [起, 止]（`null` 为数据末尾），默认样本内 2015-2020、样本外 2021 至今 | `{in_sample: [20150101, 20201231], out_of_sample: [20210101, null]}` | 每次运行时读取 |
+| `sweep.objectives` | list[`total_ret` \| `max_dd` \| `calmar` \| `cvar95`] | 否 | 平台 / 最优分析的目标：`total_ret`、`max_dd`、`calmar`、`cvar95` | `[total_ret, max_dd, calmar]` | 每次运行时读取 |
+| `sweep.focus_accounts` | `list[str]` | 否 | 热力图重点展示的账户（`TOTAL` 为合计） | `[ACC3, TOTAL]` | 每次运行时读取 |
+| `sweep.center` | `float` | 否 | 被检验邻域的生产阈值 | `0.03` | 每次运行时读取 |
+| `sweep.warmup_days` | `int` | 否 | 每个样本期前的预热交易日数 | `80` | 每次运行时读取 |
+| `scenarios` | 对象列表 | 否 | D 层合成剧本（`kind=scenario`），结果已知、可精确断言 | `[]` | 每次运行时读取 |
+| `scenarios[].name` | `str` | 是 | 剧本名 | — | 每次运行时读取 |
+| `scenarios[].description` | `str` | 否 | 说明 | `""` | 每次运行时读取 |
+| `scenarios[].trading_day` | `str` | 否 | 剧本所在的交易日 | `20260929` | 每次运行时读取 |
+| `scenarios[].start` | `str` | 否 | 第 0 步的北京时间（须在所有合约的连续交易时段内） | `09:35:00` | 每次运行时读取 |
+| `scenarios[].reference` | `dict[str, float]` | 否 | 合约 → 参考价（同时作为昨结算） | `{}` | 每次运行时读取 |
+| `scenarios[].book` | `dict[str, int]` | 否 | 第 0 步按参考价买入的初始持仓（合约 → 手数） | `{}` | 每次运行时读取 |
+| `scenarios[].account` | `str` | 否 | 剧本账户 | `ACC3` | 每次运行时读取 |
+| `scenarios[].steps` | 对象列表 | 否 | 市场状态序列 | `[]` | 每次运行时读取 |
+| `scenarios[].steps[].label` | `str` | 是 | 步骤标签（断言按它引用） | — | 每次运行时读取 |
+| `scenarios[].steps[].at_s` | `float` | 是 | 相对开始的秒数（市场时间） | — | 每次运行时读取 |
+| `scenarios[].steps[].move` | `dict[str, float]` | 否 | 合约、品种或板块 → 相对参考价的涨跌幅 | `{}` | 每次运行时读取 |
+| `scenarios[].steps[].orders` | `list[dict[str, any]]` | 否 | 该步提交的脚本委托 | `[]` | 每次运行时读取 |
+| `scenarios[].expect` | `dict[str, any]` | 否 | 期望结果（由回测和单测逐条检查） | `{}` | 每次运行时读取 |
+| `scenarios[].use_strategy` | `bool` | 否 | `true` 时运行账户的策略，而不是脚本委托 | `false` | 每次运行时读取 |
+| `seed` | `int` | 否 | 随机种子 | `20260928` | 每次运行时读取 |
+| `workers` | `int` \| `auto` | 否 | 进程池大小；`auto` 为 min(任务数, CPU 核数 − 2, 14)，`futrisk backtest run --workers` 可覆盖 | `auto` | 每次运行时读取 |
+| `warmup_days` | `int` | 否 | `start` 之前喂给策略的历史交易日数（不交易） | `0` | 每次运行时读取 |
+| `sizing` | `initial` \| `equity` | 否 | 策略的仓位基准：`initial` 初始资金（不复利，各方案在下次调仓时重新对齐）；`equity` 当前权益（复利） | `initial` | 每次运行时读取 |
+| `base_config` | `str` \| `null` | 否 | 基础配置目录（品种、账户、风控规则、日历）；`null` 为包内的 `config/`，相对路径相对应用目录 | `null` | 每次运行时读取 |
+<!-- gen:backtest end -->
+
+### 10.2 读取位置与覆盖
+
+- `futrisk backtest run <名字>` 只在**包内**的 `config/backtest/` 中找 `<名字>.yaml`（源码运行时即仓库的 `config/backtest/`，exe 为 `_internal\config\backtest\`），`<home>/config/backtest/` 中的副本不会被读取。自己写的配置直接传路径：`futrisk backtest run D:\my\bt.yaml`。
+- 回测读取的品种、账户、风控规则和交易日历默认取自包内配置（`base_config`），不是运行中系统的 home；配置哈希覆盖这几个文件和回测配置本身，写进 `manifest.json`，保证结果可复现。
+- 命令行用点号覆盖任意字段，值按 YAML 解析：
+
+```powershell
+futrisk backtest run default --set start=20200101 --set rules.threshold=0.025
+futrisk backtest run default --set "arms=[{name: base, tier: none}, {name: prod, tier: block_open}]"
+futrisk backtest sweep sweep --set "sweep.thresholds=[0.02,0.03]"
+```
+
+## 11. calendar/trading_days.csv
+
+交易日历：一列 `trading_day`（`YYYYMMDD`），以 `#` 开头的行为注释。夜盘归属、交易时段、EOD 调度、结算价时间窗都依赖它（01 §8.2）。
+
+```text
+# China futures trading days (SHFE/DCE/CFFEX). 2025-2026 official; 2027 estimated.
+trading_day
+20260924
+20260928
+20260929
+```
+
+- 由 `scripts/gen_calendar.py` 按"工作日减去法定节假日"生成；2025、2026 年为官方安排，2027 年为估计值，官方安排公布后要替换并重新生成。
+- 热加载效果与 `products.yaml` 相同：下一交易日生效，risk-engine 需重启（TD-09）。
+
+## 12. bots.yaml（可选）
+
+strategy-sim 策略机器人的参数。默认值写在代码里，`src/futrisk/sim/bots/bots.yaml` 给出同样的值作为说明和模板。需要覆盖时，把 `bots.yaml` 放进 `<home>/config/`，热加载提交后重启 strategy-sim；也可以用 `FUTRISK_BOTS_CONFIG=<文件>` 指定。合并顺序（后者优先）：代码默认值 → 包内 `bots.yaml` → 已提交版本中的 `bots.yaml` → `FUTRISK_BOTS_CONFIG` → 环境开关（§13）。
+
+<!-- gen:bots begin -->
+| 字段 | 类型 | 必填 | 说明 | 默认值 | 热加载 |
+|---|---|---|---|---|---|
+| `identity` | `str` | 否 | strategy-sim 在总线上的身份（DEALER identity），必须在 `order.*` 的白名单中（02 §4.11） | `strategy-sim` | 重启 strategy-sim |
+| `seed` | `int` | 否 | 随机种子；每个账户的随机数发生器为 `Random("{seed}:{account}")` | `20260928` | 重启 strategy-sim |
+| `aggressive` | `bool` | 否 | 激进（剧本）模式：ACC3 一次建满多头持仓，供熔断演示使用；等同于 `FUTRISK_BOTS_MODE=scenario` | `false` | 重启 strategy-sim |
+| `accounts_filter` | `list[str]` \| `null` | 否 | 只运行这些账户；`null` 为全部已配置账户 | `null` | 重启 strategy-sim |
+| `order_tag` | `str` | 否 | 写进自己 `client_order_id` 的标记，重启后据此找回前一个进程的委托 | `strategy-sim/bots` | 重启 strategy-sim |
+| `status_log_s` | `float` | 否 | 每个账户输出一条状态日志的周期（秒） | `60` | 重启 strategy-sim |
+| `resync_interval_s` | `float` | 否 | 空闲时向风控查询持仓和权益的周期（秒）；0 关闭 | `300` | 重启 strategy-sim |
+| `ready_timeout_s` | `float` | 否 | 等待风控分片 RUNNING 的最长秒数，超时后照常开始交易 | `60` | 重启 strategy-sim |
+| `startup_cancel_own` | `bool` | 否 | 启动时撤销前一个进程留下的本机器人挂单（不动人工单和减仓单） | `true` | 重启 strategy-sim |
+| `startup_sync` | `bool` | 否 | 启动时从风控分片同步持仓、权益和状态 | `true` | 重启 strategy-sim |
+| `shutdown_cancel_own` | `bool` | 否 | 正常停止时撤销自己的挂单 | `true` | 重启 strategy-sim |
+| `snapshot_resync` | `bool` | 否 | 空闲且与 `risk.snapshot` 不一致时，按快照重新同步持仓 | `true` | 重启 strategy-sim |
+| `drift_confirm` | `int` | 否 | 连续多少个不一致的快照才重新同步 | `2` | 重启 strategy-sim |
+| `execution` | 对象 | 否 | 下单执行参数（所有账户的默认值，账户级 `execution` 覆盖） | 见子字段 | 重启 strategy-sim |
+| `execution.max_orders_per_min` | `float` | 否 | 每分钟最多报单数（令牌桶，市场时间） | `6` | 重启 strategy-sim |
+| `execution.burst` | `int` | 否 | 令牌桶容量 | `3` | 重启 strategy-sim |
+| `execution.order_ttl_s` | `float` | 否 | 自己的挂单超过该秒数即撤销 | `20` | 重启 strategy-sim |
+| `execution.aggression_ticks` | `list[int]` | 否 | 可成交限价单越过对手价的 tick 数（随机取其一） | `[1, 2]` | 重启 strategy-sim |
+| `execution.passive_prob` | `float` | 否 | 开仓单改为挂在本方价位的概率 | `0.2` | 重启 strategy-sim |
+| `execution.slice_notional` | `float` | 否 | 单笔委托的最大名义金额（元） | `1500000` | 重启 strategy-sim |
+| `execution.max_slice_lots` | `int` | 否 | 单笔委托的最大手数（同时受 `max_order_qty` 限制） | `50` | 重启 strategy-sim |
+| `execution.deadband_frac` | `float` | 否 | 目标仓位变化小于目标的该比例时不调仓 | `0.1` | 重启 strategy-sim |
+| `execution.probe_qty` | `int` | 否 | 开仓限制解除后第一笔试探开仓的手数 | `1` | 重启 strategy-sim |
+| `execution.in_doubt_resubmit_s` | `float` | 否 | 结果不明（超时）的委托，隔该秒数用同一个 `client_order_id` 重发 | `2` | 重启 strategy-sim |
+| `execution.in_doubt_giveup_s` | `float` | 否 | 超过该秒数放弃（不再计为在途） | `15` | 重启 strategy-sim |
+| `execution.cancel_retry_s` | `float` | 否 | 结果不明的撤单隔该秒数重发 | `5` | 重启 strategy-sim |
+| `execution.halt_probe_s` | `float` | 否 | 熔断期间每隔该秒数发一笔 1 手的开仓试探（被拒 `REJECT_ACCOUNT_HALTED`）；0 关闭 | `20` | 重启 strategy-sim |
+| `gates` | 对象 | 否 | 被拒后的退避（市场时间秒，重复被拒时翻倍直到上限） | 见子字段 | 重启 strategy-sim |
+| `gates.halt_backoff_s` | `float` | 否 | 熔断或 kill switch 拒单后的退避 | `30` | 重启 strategy-sim |
+| `gates.halt_backoff_max_s` | `float` | 否 | 上述退避的上限 | `120` | 重启 strategy-sim |
+| `gates.block_backoff_s` | `float` | 否 | 禁开、禁止亏损加仓、敞口上限、what-if、资金不足等拒单后的退避 | `20` | 重启 strategy-sim |
+| `gates.block_backoff_max_s` | `float` | 否 | 上述退避的上限 | `300` | 重启 strategy-sim |
+| `gates.transport_backoff_s` | `float` | 否 | TIMEOUT / UNAVAILABLE / BUSY / RISK_BUSY 重试失败后的退避 | `3` | 重启 strategy-sim |
+| `gates.transport_backoff_max_s` | `float` | 否 | 上述退避的上限 | `60` | 重启 strategy-sim |
+| `gates.size_restore_s` | `float` | 否 | 单笔上限系数限制（ORDER_SIZE_FACTOR）安静该秒数后恢复全量 | `120` | 重启 strategy-sim |
+| `accounts` | {account_id: 对象} | 否 | 按账户的覆盖，键为账户 ID | `{}` | 重启 strategy-sim |
+| `accounts.{account_id}.enabled` | `bool` | 否 | `false` 时不运行该账户的机器人 | `true` | 重启 strategy-sim |
+| `accounts.{account_id}.strategy` | `str` \| `null` | 否 | 策略名；`null` 取 `accounts.yaml` 的 `strategy` | `null` | 重启 strategy-sim |
+| `accounts.{account_id}.params` | `dict[str, any]` | 否 | 策略参数（由策略自己的模型校验，如 `instruments`、`bar_s`、`notional_frac`） | `{}` | 重启 strategy-sim |
+| `accounts.{account_id}.execution` | `dict[str, any]` | 否 | 覆盖全局 `execution` 的字段 | `{}` | 重启 strategy-sim |
+| `accounts.{account_id}.aggressive` | `dict[str, any]` | 否 | 只在激进（剧本）模式下叠加的 `params` / `execution` | `{}` | 重启 strategy-sim |
+<!-- gen:bots end -->
+
+## 13. 环境变量
+
+| 变量 | 作用 | 读取方 |
+|---|---|---|
+| `FUTRISK_HOME` | 运行时 home 目录（优先级低于 `--home`） | 全部命令和服务 |
+| `FUTRISK_API_KEY` | CLI 使用的 API key；设置后不再读取 bootstrap key 文件 | CLI（`positions`、`order`、`risk`、`settle` 等） |
+| `FUTRISK_HOME_ID` | 覆盖 `<home>/home_id`：多个 home 属于同一套部署时使用（docker compose 中所有容器相同） | 全部服务、CLI |
+| `app.yaml` 中 `key_env` 指定的变量 | 具名 API key 的明文（至少 16 个字符） | api-gateway |
+| `app.yaml` 中 `webhook_url_env` 指定的变量 | 告警 webhook 地址 | api-gateway |
+| `FUTRISK_SUPERVISOR_CLOCK_ONLY` | `1` 时 supervisor 只维护市场时钟，不管理进程（同 `futrisk up --clock-only`） | supervisor |
+| `FUTRISK_SIM_CLOCK_WAIT_S` | sim-exchange 启动时等待 supervisor 时钟的秒数，默认 60 | sim-exchange |
+| `FUTRISK_BOTS_MODE` | `scenario`（或 `aggressive`、`breaker`）时 ACC3 一次建满持仓，供熔断演示使用；`futrisk demo --scenario` 自动设置 | strategy-sim |
+| `FUTRISK_BOTS_AGGRESSIVE` | `1`/`true` 等价于上一项 | strategy-sim |
+| `FUTRISK_BOTS_SEED` | 覆盖机器人随机种子 | strategy-sim |
+| `FUTRISK_BOTS_ACCOUNTS` | 只运行这些账户的机器人，如 `ACC3,ACC5` | strategy-sim |
+| `FUTRISK_BOTS_CONFIG` | 额外的 `bots.yaml` 文件路径 | strategy-sim |
+| `FUTRISK_HTTP_PORT`、`FUTRISK_VERSION` | docker compose：宿主机端口（默认 8000）、镜像版本 | `deploy/compose.yml` |
+| `FUTRISK_API`、`FUTRISK_API_KEY_FILE`、`FUTRISK_SEED_TIMEOUT_S` | docker compose 的一次性建账容器 | `deploy/seed_books.py` |
+| `FUTRISK_E2E` | `1` 时运行端到端测试 | pytest |
+
+---
+
+## 附录 A 修订记录
+
+| 版本 | 日期 | 说明 |
+|---|---|---|
+| v0.1 | 2026-09-25 | 初版：10 类配置文件和 `bots.yaml` 的字段表由 `scripts/gen_config_reference.py` 从 pydantic 模型生成；补充热加载效果（按代码核对：risk-engine 的品种参数需重启、数据源和端点拒绝热改、外部组件需重启）、动作参数、剧本动作与故障类型、回测配置的读取位置和环境变量 |

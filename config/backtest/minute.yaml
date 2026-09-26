@@ -1,0 +1,38 @@
+# Layer B: Sina 60-minute bars, every bar expanded to O, E1, E2, C (the open-near-extreme order inside the bar).
+# Sina's minute volumes are unreliable (data/hist/SOURCES.md), so every day still settles on the official
+# daily settlement price; minute bars only shape the intraday path. cu and au are left out because their
+# 60-minute history is the shortest (au starts 2026-04-30, cu 2026-03-23; the common window of the products
+# listed here is 2026-01-13 .. latest). The replay days are the days every loaded product has minute bars, so
+# ACC2 (multi_trend, whose default list has cu and au) trades only rb, m, IF, T here.
+# The 80 warm-up days come from the daily bars before the window (no minute day is spent on warm-up).
+# Run: futrisk backtest run minute [--set data.minute_period=15]
+# Layer-A control on the same days: futrisk backtest run minute --set layer=A --set data.minute_window=60
+name: minute
+description: >-
+  B 层：新浪 60 分钟线展开为开、极值、极值、收 4 个价格点，结算仍用官方结算价；与 A 层同样的配对实验，覆盖分钟线的共同区间。
+kind: arms
+layer: B
+data:
+  minute_period: 60
+products: [rb, hc, i, j, m, IF, IH, IC, IM, T]
+accounts:
+  ACC1: {strategy: channel_breakout}
+  ACC2: {strategy: multi_trend, products: [rb, m, IF, T]}
+  ACC3: {strategy: counter_trend_add}
+  ACC4: {strategy: index_directional}
+  ACC5: {strategy: rb_calendar_spread}
+  ACC3B: {strategy: counter_trend_add, params: {max_adds: 0}, capital: 10000000, role: control, title: ACC3 无加仓对照}
+arms:
+  - {name: no_rules, tier: none}
+  - {name: alert_only, tier: alert_only}
+  - {name: block_open, tier: block_open}
+  - {name: halt_only, tier: halt_only}
+  - {name: halve, tier: halve}
+  - {name: flatten, tier: flatten}
+rules:
+  threshold: 0.03
+warmup_days: 80
+analysis:
+  hit_rate: true
+seed: 20260928
+workers: auto

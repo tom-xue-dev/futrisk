@@ -1,0 +1,26 @@
+# Market-data fault scenario QS-06 (01 §6.4, §8.5, §10.2).
+#
+# Intent: both simulated feeds go down together - the equivalent of the exchange itself
+# failing, since Feed A and Feed B share the sim-exchange upstream (01 §8.13). md-gateway
+# marks every contract STALE after 5 s and UNKNOWN after 30 s; risk-engine blocks opening
+# orders on those contracts (closing stays allowed) and the alert state machines hold still
+# (0 transitions), with exactly one alert per contract.
+name: all_feeds_outage
+description: >-
+  QS-06 all-sources outage: Feed A and Feed B are both unavailable for 35 s (reconnects and
+  polls refused), then recover. Variable: outage_s.
+vars:
+  outage_s: 35
+steps:
+  - at_s: 0
+    action: log
+    note: "all_feeds_outage: Feed A and Feed B down for ${outage_s}s"
+  - at_s: 0
+    action: fault
+    params: {type: FEED_DISCONNECT, target: feed_a, params: {refuse_reconnect_s: "${outage_s}"}}
+  - at_s: 0
+    action: fault
+    params: {type: FEED_DISCONNECT, target: feed_b, params: {refuse_reconnect_s: "${outage_s}"}}
+  - at_s: 40
+    action: log
+    note: "all_feeds_outage: feeds back - expect STALE/UNKNOWN to clear once fresh LIVE ticks arrive"

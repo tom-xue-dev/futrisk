@@ -1,0 +1,17 @@
+# Run mode, demo market clock, EOD schedule, logging, API keys.
+mode: demo
+demo:
+  start_at: null        # null: the next trading day at 08:58 (before the opening auction)
+  pre_close_at: "14:58"
+  lead_s: 120
+  auto_seed: true
+eod_start_at: "15:30"
+logging:
+  level: INFO
+  retention_days: 30
+  rotation_mb: 100
+api_keys: []            # e.g. {name: ops, role: ADMIN, key_env: FUTRISK_OPS_KEY}
+notify:
+  webhook_url_env: null
+  channel: log
+  min_severity: HIGH

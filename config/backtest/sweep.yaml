@@ -1,0 +1,37 @@
+# Breaker threshold × action tier (plan §7.1 参数扫描): in-sample 2015-2020, out-of-sample 2021 to now.
+# Each cell is an independent run on K = ensemble.paths realizations of the calibrated intraday path model; the
+# heatmaps show the change against the same period's baseline (alert_only at the cell's threshold trades
+# exactly like no_rules). Per tier and objective the report locates the optimum (interior or at the edge of the
+# grid) and tests whether 3% sits on a plateau: flat around 3% compared with the whole curve and near the best
+# value; a straight slope is not a plateau. Calmar is only compared where CAGR > 0.
+# Run: futrisk backtest sweep sweep     (or: futrisk backtest run sweep)  [--set ensemble.paths=0: one deterministic path]
+name: sweep
+description: >-
+  日亏熔断阈值 {0.75, 1, 1.5, 2, 2.5, 3, 4, 5}% × 动作档位 {仅告警, 限制+熔断, 仅熔断, 减半, 清仓}；2015-2020 样本内、2021 至今样本外；
+  每格若干条随机日内路径。
+kind: sweep
+layer: A
+products: [rb, hc, cu, au, i, j, m, IF, IH, IC, IM, T]
+accounts:
+  ACC1: {strategy: channel_breakout}
+  ACC2: {strategy: multi_trend}
+  ACC3: {strategy: counter_trend_add}
+  ACC4: {strategy: index_directional}
+  ACC5: {strategy: rb_calendar_spread}
+  ACC3B: {strategy: counter_trend_add, params: {max_adds: 0}, capital: 10000000, role: control, title: ACC3 无加仓对照}
+sweep:
+  thresholds: [0.0075, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]
+  tiers: [alert_only, block_open, halt_only, halve, flatten]
+  periods:
+    in_sample: ["20150105", "20201231"]
+    out_of_sample: ["20210104", null]
+  objectives: [total_ret, max_dd, calmar]
+  focus_accounts: [ACC3, STATIC, TOTAL, ACC3B]
+  center: 0.03
+  warmup_days: 80
+ensemble:
+  paths: 3
+analysis:
+  bootstrap_samples: 200
+seed: 20260928
+workers: auto
