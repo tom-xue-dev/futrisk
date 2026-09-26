@@ -4,19 +4,12 @@ A :class:`DayPlan` holds everything the day loop needs for one trading day: the
 market states to replay in time order, the contracts' daily bars (settlement
 price, previous settlement), the main contract of each product, roll
 information, limit prices / limit locks and the previous settlement prices of
-tomorrow's contracts. The four layers produce it differently:
+tomorrow's contracts. The two layers produce it differently:
 
-- **A** (:class:`DailySource`): synthesized paths from daily bars
+- **A** (:class:`DailySource`): the synthesized path of every daily bar
   (:mod:`futrisk.backtest.paths`), official settlement prices;
-- **B** (:class:`MinuteSource`): every Sina minute bar expanded to O, E1, E2, C;
-  Sina's minute volumes are unreliable, so the day still settles on the official
-  daily settlement price (``data/hist/SOURCES.md``); contracts without minute
-  bars (an old main on a roll day) fall back to the synthesized path;
-- **C** (:class:`TickSource`): recorded ticks (``<home>/ticks/raw/<td>/sina``,
-  LIVE rows only) replayed as recorded; the settlement price is computed from the
-  replayed tape with the 01 §8.15 rules (``core.settle_price``: SHFE/DCE full-day
-  VWAP, CFFEX last hour, exchange rounding);
-- **D** (:class:`ScenarioSource`): synthetic scenarios with known answers.
+- **D** (:class:`ScenarioSource`): a synthetic scenario with known answers,
+  settled from the replayed tape with the 01 §8.15 rules.
 
 Limit locks: history's limits differ from today's ``products.yaml`` (widened
 before holidays and in stress), so a state is treated as limit-locked when its
@@ -28,28 +21,16 @@ be wider than today's).
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 from futrisk.backtest.config import BacktestConfig, ScenarioSpec
 from futrisk.backtest.data import Bar, DailyBar, HistData, list_instruments
-from futrisk.backtest.pathmodel import PathModel, ensemble_points
-from futrisk.backtest.paths import (
-    KIND_CLOSE,
-    KIND_OPEN,
-    Point,
-    TickGrid,
-    Timeline,
-    leg_counts,
-    minute_bar_points,
-    synthesize,
-)
-from futrisk.common.calendar import TradingCalendar, parse_templates
+from futrisk.backtest.paths import KIND_CLOSE, KIND_OPEN, Point, TickGrid, Timeline, leg_counts, synthesize
+from futrisk.common.calendar import TradingCalendar
 from futrisk.common.clock import BJ, bj_to_ns, parse_td, td_str
 from futrisk.common.config.products import ProductsConfig, product_code
 from futrisk.common.decimals import D
@@ -73,22 +54,16 @@ class DayPlan:
     roll_factors: dict[str, float] = field(default_factory=dict)  # product -> back-adjustment factor
     rolls: dict[str, tuple[str, str]] = field(default_factory=dict)  # product -> (old main, new main)
     limits: dict[str, tuple[float, float]] = field(default_factory=dict)  # instrument -> (upper, lower)
-    extras: dict[str, dict[str, str]] = field(default_factory=dict)  # account -> alias -> instrument
     next_pre_settle: dict[str, float] = field(default_factory=dict)  # tomorrow's contracts -> today's settle
     daily_bars: dict[str, DailyBar] = field(default_factory=dict)  # product -> completed bar (strategy history)
     labels: dict[int, str] = field(default_factory=dict)  # ts -> scenario step label (layer D)
     scripted: dict[int, list[dict[str, Any]]] = field(default_factory=dict)  # ts -> scripted orders (layer D)
-    compute_settle: bool = False  # C/D: settle from the replayed tape
+    compute_settle: bool = False  # D: settle from the replayed tape
 
     @property
     def estimated(self) -> set[str]:
+        """Contracts that settle on an estimated price today (a DCE non-main, a flat exit bar)."""
         return {i for i, b in self.bars.items() if b.estimated}
-
-    def first_ts(self) -> dict[str, int]:
-        out: dict[str, int] = {}
-        for p in self.points:
-            out.setdefault(p.instrument_id, p.ts_ns)
-        return out
 
 
 # ------------------------------------------------------------------ helpers
@@ -135,7 +110,7 @@ def official_view(bar: Bar, registry: InstrumentRegistry) -> SettlementPriceView
 def tape_view(
     registry: InstrumentRegistry, instrument_id: str, trading_day: str, points: Sequence[Point], pre_settle: float
 ) -> SettlementPriceView:
-    """Settlement price from a replayed tape with the 01 §8.15 rules (layers C and D)."""
+    """Settlement price from a replayed tape with the 01 §8.15 rules (layer D)."""
     mult = registry.multiplier(instrument_id)
     tape: list[tuple[int, Decimal, int]] = []
     prev_v, prev_t = 0, 0.0
@@ -167,23 +142,9 @@ def session_timeline(registry: InstrumentRegistry, instrument_id: str, trading_d
     return Timeline(ivs) if ivs else None
 
 
-def minute_common_days(hist: HistData, period: int) -> set[str]:
-    """Trading days every loaded product with a ``period``-minute file covers (the layer B window)."""
-    common: set[str] | None = None
-    for p in hist.products:
-        try:
-            bars = hist.minute_bars(p, period)
-        except FileNotFoundError:
-            continue
-        ds = {b.trading_day for b in bars if b.instrument_id is not None}
-        ds.discard(min(ds, default=""))  # a file's first day is usually partial
-        common = ds if common is None else common & ds
-    return common or set()
-
-
 # ------------------------------------------------------------------ base
 class DataSource:
-    """Common interface of the four layers."""
+    """Common interface of the two layers."""
 
     layer = "?"
 
@@ -203,7 +164,7 @@ class DataSource:
     def warmup_bars(self, product: str, before: str, n: int) -> list[DailyBar]:
         return []
 
-    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str], extras: Mapping[str, Mapping[str, str]]) -> DayPlan:
+    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str]) -> DayPlan:
         raise NotImplementedError
 
     def next_trading_day(self, td: str) -> str:
@@ -255,49 +216,31 @@ def _build_universe(
 
 # ------------------------------------------------------------------ layer A
 class DailySource(DataSource):
-    """Layer A: synthesized intraday paths from daily bars, official settlement prices.
+    """Layer A: the synthesized intraday path of every daily bar, official settlement prices.
 
-    ``path_model`` + ``path_index`` select realization ``path_index`` of the stochastic path ensemble
-    (:mod:`futrisk.backtest.pathmodel`); without them every contract replays the deterministic path of
-    ``cfg.path.rule``. ``products`` restricts the replay to the products a task's accounts trade (the path of a
-    contract never depends on the other contracts, so a subset replays the same paths).
+    ``products`` restricts the replay to the products the accounts trade (the path of a contract never depends
+    on the other contracts, so a subset replays the same paths).
     """
 
     layer = "A"
 
     def __init__(self, hist: HistData, cfg: BacktestConfig, base_calendar: TradingCalendar | None, *,
-                 far_products: Iterable[str] = (), products: Iterable[str] | None = None,
-                 path_model: PathModel | None = None, path_index: int | None = None) -> None:
+                 products: Iterable[str] | None = None) -> None:
         super().__init__()
         self.hist = hist
         self.cfg = cfg
         self.only = set(products) if products is not None else None
-        self.path_model = path_model
-        self.path_index = path_index
         self.notes.extend(hist.notes)
         self.calendar = hist.calendar(base_calendar)
-        insts: set[str] = set(hist.all_mains())
-        for p in far_products:
-            if p in hist.series:
-                insts.update(hist.instruments_of(p))
-        self.products_cfg, self.registry = _build_universe(hist.base_products, self.calendar, insts, hist)
+        self.products_cfg, self.registry = _build_universe(hist.base_products, self.calendar, hist.all_mains(), hist)
         self._grid: dict[str, TickGrid] = {}
         self._timelines: dict[tuple[str, str], Timeline | None] = {}
-
-    @property
-    def ensemble(self) -> bool:
-        return self.path_model is not None and self.path_index is not None
 
     def products(self) -> list[str]:
         return [p for p in self.hist.products if self.only is None or p in self.only]
 
     def days(self) -> list[str]:
-        days = self.hist.trading_days(self.cfg.start, self.cfg.end)
-        period = self.cfg.data.minute_window
-        if period:
-            common = minute_common_days(self.hist, period)
-            days = [d for d in days if d in common]
-        return days
+        return self.hist.trading_days(self.cfg.start, self.cfg.end)
 
     def grid(self, inst: str) -> TickGrid:
         g = self._grid.get(inst)
@@ -378,46 +321,26 @@ class DailySource(DataSource):
                 out[nm] = nb.pre_settle
         return out
 
-    def _extras(self, td: str, mains: Mapping[str, str], extras: Mapping[str, Mapping[str, str]]) -> dict[str, dict[str, str]]:
-        """Resolve ``{alias: "far:<product>"}`` requests to today's far contract of that product."""
-        out: dict[str, dict[str, str]] = {}
-        for acct, req in extras.items():
-            for alias, what in req.items():
-                kind, _, prod = what.partition(":")
-                if kind == "far" and prod in mains:
-                    far = self.hist.far_contract(prod, td, mains[prod])
-                    if far is not None:
-                        out.setdefault(acct, {})[alias] = far
-        return out
-
-    def _legs(self, bar: Bar) -> tuple[int, int, int]:
-        pp = self.cfg.path
-        return leg_counts(bar.open or 0.0, bar.high or 0.0, bar.low or 0.0, bar.close or 0.0, points_per_leg=pp.points_per_leg,
-                          max_step=pp.max_step, max_points=pp.max_points_per_leg, rule=pp.rule)
-
     def _synth(self, bar: Bar) -> tuple[list[Point], tuple[float, float]]:
-        """The states of one contract-day: a function of this contract's bar (and the realization) only."""
+        """The states of one contract-day: a function of this contract's bar only."""
         inst, td = bar.instrument_id, bar.trading_day
         tl = self.timeline(inst, td)
         if tl is None or not bar.traded:
             return [], (0.0, 0.0)
         grid = self.grid(inst)
         o, h, lo, c = bar.open or 0.0, bar.high or 0.0, bar.low or 0.0, bar.close or 0.0
-        if self.path_model is not None and self.path_index is not None:
-            pts = ensemble_points(self.path_model, self.path_index, inst, bar.product, td, o, h, lo, c, timeline=tl,
-                                  grid=grid, multiplier=self.registry.multiplier(inst), max_step=self.cfg.path.max_step)
-        else:
-            pts = synthesize(inst, tl, o, h, lo, c, grid=grid, multiplier=self.registry.multiplier(inst),
-                             points_per_leg=self.cfg.path.points_per_leg, rule=self.cfg.path.rule, legs=self._legs(bar))
+        pp = self.cfg.path
+        legs = leg_counts(o, h, lo, c, points_per_leg=pp.points_per_leg, max_step=pp.max_step,
+                          max_points=pp.max_points_per_leg, rule=pp.rule)
+        pts = synthesize(inst, tl, o, h, lo, c, grid=grid, multiplier=self.registry.multiplier(inst),
+                         points_per_leg=pp.points_per_leg, rule=pp.rule, legs=legs)
         upper, lower, up_lock, down_lock = lock_prices(bar, self.registry, grid)
         mark_locks(pts, up_lock, down_lock, grid)
         return pts, (upper, lower)
 
-    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str], extras: Mapping[str, Mapping[str, str]]) -> DayPlan:
+    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str]) -> DayPlan:
         mains, factors, rolls = self._mains_and_rolls(td)
-        ex = self._extras(td, mains, extras)
-        insts = set(mains.values()) | set(held) | {i for d in ex.values() for i in d.values()}
-        bars = self._bars_for(td, insts, pre_settle)
+        bars = self._bars_for(td, set(mains.values()) | set(held), pre_settle)
         points: list[Point] = []
         limits: dict[str, tuple[float, float]] = {}
         for inst, bar in bars.items():
@@ -439,270 +362,14 @@ class DailySource(DataSource):
             roll_factors=factors,
             rolls=rolls,
             limits=limits,
-            extras=ex,
             next_pre_settle=self._next_pre(td, bars),
             daily_bars=daily,
         )
 
 
-# ------------------------------------------------------------------ layer B
-class MinuteSource(DailySource):
-    """Layer B: minute bars expanded to O, E1, E2, C; official daily settlement prices."""
-
-    layer = "B"
-
-    def __init__(self, hist: HistData, cfg: BacktestConfig, base_calendar: TradingCalendar | None, *,
-                 far_products: Iterable[str] = (), products: Iterable[str] | None = None) -> None:
-        self.period = cfg.data.minute_period
-        self._minute: dict[str, dict[str, list[Any]]] = {}
-        minute_insts: set[str] = set()
-        far_products = list(far_products)
-        for p in hist.products:
-            try:
-                bars = hist.minute_bars(p, self.period)
-            except FileNotFoundError:
-                hist.notes.append(f"{p}: minute/{p}_{self.period}m.parquet missing; product skipped in layer B")
-                continue
-            by_day: dict[str, list[Any]] = {}
-            for b in bars:
-                if b.instrument_id is None:
-                    continue
-                by_day.setdefault(b.trading_day, []).append(b)
-                minute_insts.add(b.instrument_id)
-            self._minute[p] = by_day
-        super().__init__(hist, cfg, base_calendar, far_products=far_products, products=products)
-        if minute_insts - set(self.products_cfg.instrument_ids()):
-            insts = set(hist.all_mains()) | minute_insts
-            for p in far_products:  # calendar-spread far legs (synthesized: Sina has minute bars of the main only)
-                if p in hist.series:
-                    insts.update(hist.instruments_of(p))
-            self.products_cfg, self.registry = _build_universe(hist.base_products, self.calendar, insts, hist)
-
-    def products(self) -> list[str]:
-        return [p for p in self.hist.products if p in self._minute and (self.only is None or p in self.only)]
-
-    def days(self) -> list[str]:
-        lo = self.cfg.start or "00000000"
-        hi = self.cfg.end or "99999999"
-        # only days that every loaded product with minute data covers (a common window; the same for every task,
-        # whatever products its accounts trade); a file's first day is usually partial and is left out
-        common = None
-        for by_day in self._minute.values():
-            ds = set(by_day)
-            ds.discard(min(ds, default=""))
-            common = ds if common is None else common & ds
-        out = sorted(d for d in (common or set()) if lo <= d <= hi and d in self.hist.all_days)
-        return out
-
-    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str], extras: Mapping[str, Mapping[str, str]]) -> DayPlan:
-        mains: dict[str, str] = {}
-        factors: dict[str, float] = {}
-        rolls: dict[str, tuple[str, str]] = {}
-        minute_pts: dict[str, list[Point]] = {}
-        for p in self.products():
-            day_bars = self._minute[p].get(td, [])
-            if not day_bars:
-                continue
-            inst = day_bars[0].instrument_id
-            mains[p] = inst
-            prev = self.hist.series[p].prev_day(td)
-            prev_bars = self._minute[p].get(prev, []) if prev else []
-            prev_inst = prev_bars[0].instrument_id if prev_bars else None
-            if prev_inst is not None and prev_inst != inst:
-                rolls[p] = (prev_inst, inst)
-                pb = self.hist.bar(td, inst)
-                ob = self.hist.bar(prev, prev_inst) if prev else None
-                if pb is not None and pb.pre_settle and ob is not None and ob.settle:
-                    factors[p] = pb.pre_settle / ob.settle
-            tl = self.timeline(inst, td)
-            if tl is None:
-                continue
-            minute_pts[inst] = minute_bar_points(
-                inst, tl, [(b.ts_ns, b.open, b.high, b.low, b.close) for b in day_bars if b.instrument_id == inst],
-                period_min=self.period, multiplier=self.registry.multiplier(inst), rule=self.cfg.path.rule,
-            )
-        ex = self._extras(td, mains, extras)
-        insts = set(mains.values()) | set(held) | {i for d in ex.values() for i in d.values()}
-        bars = self._bars_for(td, insts, pre_settle)
-        points: list[Point] = []
-        limits: dict[str, tuple[float, float]] = {}
-        for inst, bar in bars.items():
-            pts = minute_pts.get(inst)
-            if pts:
-                grid = self.grid(inst)
-                if bar.traded:
-                    upper, lower, up_lock, down_lock = lock_prices(bar, self.registry, grid)
-                    lo = min(p.price for p in pts)
-                    hi = max(p.price for p in pts)
-                    upper, lower = max(upper, hi), min(lower, lo)
-                    mark_locks(pts, up_lock, down_lock, grid)
-                else:
-                    upper, lower = max(p.price for p in pts), min(p.price for p in pts)
-                points.extend(pts)
-                limits[inst] = (upper, lower)
-            else:
-                spts, lim = self._synth(bar)
-                if spts:
-                    points.extend(spts)
-                    limits[inst] = lim
-        points.sort(key=lambda p: (p.ts_ns, p.instrument_id))
-        daily: dict[str, DailyBar] = {}
-        for p, inst in mains.items():
-            b = self.hist.bar(td, inst)
-            if b is not None and b.traded and b.settle is not None:
-                daily[p] = DailyBar(td, inst, b.open or 0.0, b.high or 0.0, b.low or 0.0, b.close or 0.0, b.settle,
-                                    factors.get(p, 1.0), p in rolls)
-        nxt: dict[str, float] = {}
-        for p in self.products():
-            nd = self.hist.series[p].next_day(td)
-            nb = self._minute[p].get(nd, []) if nd else []
-            if nb and nb[0].instrument_id not in bars:
-                tb = self.hist.bar(td, nb[0].instrument_id)
-                if tb is not None and tb.settle is not None:
-                    nxt[nb[0].instrument_id] = tb.settle
-        return DayPlan(trading_day=td, points=points, bars=bars, mains=mains, roll_factors=factors, rolls=rolls,
-                       limits=limits, extras=ex, next_pre_settle=nxt, daily_bars=daily)
-
-    def minute_days(self, product: str) -> dict[str, list[tuple[float, float, float, float]]]:
-        """``{trading_day: [(o, h, l, c), ...]}`` of the Sina main (hit-rate input)."""
-        out: dict[str, list[tuple[float, float, float, float]]] = {}
-        for td, bars in self._minute.get(product, {}).items():
-            inst = bars[0].instrument_id
-            out[td] = [(b.open, b.high, b.low, b.close) for b in bars if b.instrument_id == inst]
-        return out
-
-
-# ------------------------------------------------------------------ layer C
-class TickSource(DataSource):
-    """Layer C: recorded Sina ticks (LIVE rows) replayed as recorded; settlement computed from the tape."""
-
-    layer = "C"
-
-    def __init__(self, raw_dir: Path, base: ProductsConfig, base_calendar: TradingCalendar, *,
-                 days: Sequence[str] = (), products: Sequence[str] = (), hist: HistData | None = None) -> None:
-        super().__init__()
-        from futrisk.marketdata.recorder import list_trading_days
-
-        self.raw_dir = Path(raw_dir)
-        self.hist = hist
-        found = list_trading_days(self.raw_dir)
-        self._days = [d for d in found if not days or d in set(days)]
-        if not self._days:
-            self.notes.append(f"no recorded ticks under {self.raw_dir}")
-        self._products_filter = set(products)
-        self._ticks: dict[str, dict[str, list[Point]]] = {}
-        self._pre: dict[str, dict[str, float]] = {}
-        self._files: dict[str, Path] = {}
-        self._file_sha: dict[str, str] = {}
-        insts: set[str] = set()
-        for td in self._days:
-            per = self._load_day(td)
-            self._ticks[td] = per
-            insts.update(per)
-        tdays = {parse_td(d) for d in self._days}
-        tdays.update(base_calendar.trading_days_between(base_calendar.first_day, base_calendar.last_day))
-        self.calendar = TradingCalendar(sorted(tdays), parse_templates(base.session_templates))
-        self.products_cfg, self.registry = _build_universe(base, self.calendar, insts, hist)
-
-    def _load_day(self, td: str) -> dict[str, list[Point]]:
-        from futrisk.backtest.data import sha256_file
-        from futrisk.marketdata.recorder import list_shards, read_raw_ticks
-
-        for p in list_shards(self.raw_dir, td):
-            rel = f"ticks/raw/{td}/sina/{p.name}"
-            self._files[rel] = p
-            self._file_sha[rel] = sha256_file(p)  # hashed when read (a recorder may still be appending shards)
-        df = read_raw_ticks(self.raw_dir, td)
-        out: dict[str, list[Point]] = {}
-        pre: dict[str, float] = {}
-        if not len(df):
-            return out
-        df = df[df["mode"].astype(str) == "LIVE"]
-        df = df.sort_values(["exch_ts_ns", "recv_ns"], kind="stable")
-        for r in df.itertuples(index=False):
-            inst = str(r.instrument_id)
-            if self._products_filter and product_code(inst) not in self._products_filter:
-                continue
-            flags = int(r.flags) if r.flags is not None and not (isinstance(r.flags, float) and math.isnan(r.flags)) else 0
-            bid = float(r.bid1) if r.bid1 is not None and r.bid1 == r.bid1 else None
-            ask = float(r.ask1) if r.ask1 is not None and r.ask1 == r.ask1 else None
-            out.setdefault(inst, []).append(
-                Point(int(r.exch_ts_ns), inst, float(r.last), "T", int(r.volume), float(r.turnover), flags, bid, ask)
-            )
-            if r.pre_settle is not None and r.pre_settle == r.pre_settle:
-                pre[inst] = float(r.pre_settle)
-        self._pre[td] = pre
-        return out
-
-    def products(self) -> list[str]:
-        return sorted({product_code(i) for per in self._ticks.values() for i in per})
-
-    def days(self) -> list[str]:
-        return list(self._days)
-
-    def warmup_bars(self, product: str, before: str, n: int) -> list[DailyBar]:
-        if self.hist is None or product not in self.hist.series or n <= 0:
-            return []
-        return [b for b in self.hist.daily_bars(product) if b.trading_day < before][-n:]
-
-    def initial_pre_settle(self, td: str) -> dict[str, float]:
-        return dict(self._pre.get(td, {}))
-
-    def file_hashes(self) -> dict[str, str]:
-        return dict(sorted(self._file_sha.items()))
-
-    def main_contracts(self, td: str) -> dict[str, str]:
-        """Main contract per product on ``td``, chosen with information from before the open (no look-ahead):
-        the largest final volume of the previous recorded day; on the first recorded day the daily data's main
-        (``data/hist``) when it was recorded, else the first contract id."""
-        per = self._ticks.get(td, {})
-        i = self._days.index(td) if td in self._days else -1
-        prev = self._ticks.get(self._days[i - 1], {}) if i > 0 else {}
-        prev_vol = {inst: pts[-1].volume for inst, pts in prev.items() if pts}
-        by_product: dict[str, list[str]] = {}
-        for inst in per:
-            by_product.setdefault(product_code(inst), []).append(inst)
-        mains: dict[str, str] = {}
-        for p, cands in sorted(by_product.items()):
-            known = [(prev_vol[c], c) for c in cands if c in prev_vol]
-            if known:
-                mains[p] = max(known)[1]
-                continue
-            hm = self.hist.main(p, td) if self.hist is not None else None
-            mains[p] = hm if hm in cands else min(cands)
-        return mains
-
-    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str], extras: Mapping[str, Mapping[str, str]]) -> DayPlan:
-        per = self._ticks.get(td, {})
-        mains = self.main_contracts(td)
-        bars: dict[str, Bar] = {}
-        points: list[Point] = []
-        limits: dict[str, tuple[float, float]] = {}
-        pre = self._pre.get(td, {})
-        for inst, pts in per.items():
-            prices = [x.price for x in pts]
-            ps = pre.get(inst, pre_settle.get(inst, prices[0]))
-            bars[inst] = Bar(td, inst, product_code(inst), prices[0], max(prices), min(prices), prices[-1], None, "tape",
-                             ps, "exchange", pts[-1].volume)
-            up, lo = self.registry.limit_prices(inst, D(ps), td)
-            limits[inst] = (max(float(up), max(prices)), min(float(lo), min(prices)))
-            points.extend(pts)
-        for inst in held - set(per):
-            flat = pre_settle.get(inst)
-            if flat is not None:
-                bars[inst] = Bar(td, inst, product_code(inst), None, None, None, None, flat, "flat", flat, "series", 0)
-        points.sort(key=lambda p: (p.ts_ns, p.instrument_id))
-        daily: dict[str, DailyBar] = {}
-        for p, inst in mains.items():
-            b = bars[inst]
-            daily[p] = DailyBar(td, inst, b.open or 0.0, b.high or 0.0, b.low or 0.0, b.close or 0.0, b.close or 0.0, 1.0, False)
-        return DayPlan(trading_day=td, points=points, bars=bars, mains=mains, limits=limits, daily_bars=daily,
-                       compute_settle=True)
-
-
 # ------------------------------------------------------------------ layer D
 class ScenarioSource(DataSource):
-    """Layer D: a synthetic scenario (one trading day of explicit market states)."""
+    """Layer D: a synthetic scenario (one trading day of explicit market states and scripted orders)."""
 
     layer = "D"
 
@@ -710,8 +377,7 @@ class ScenarioSource(DataSource):
         super().__init__()
         self.spec = spec
         self.calendar = base_calendar
-        insts = set(spec.reference)
-        self.products_cfg, self.registry = _build_universe(base, self.calendar, insts, None)
+        self.products_cfg, self.registry = _build_universe(base, self.calendar, set(spec.reference), None)
 
     def products(self) -> list[str]:
         return sorted({product_code(i) for i in self.spec.reference})
@@ -734,7 +400,7 @@ class ScenarioSource(DataSource):
                 return move[key]
         return None
 
-    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str], extras: Mapping[str, Mapping[str, str]]) -> DayPlan:
+    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str]) -> DayPlan:
         t0 = self.start_ns()
         points: list[Point] = []
         labels: dict[int, str] = {}
@@ -746,7 +412,7 @@ class ScenarioSource(DataSource):
             ts = t0 + int(step.at_s * 1_000_000_000)
             labels[ts] = step.label
             orders = [dict(o, step=step.label) for o in step.orders]
-            if k == 0 and self.spec.book and not self.spec.use_strategy:
+            if k == 0 and self.spec.book:
                 book = [{"account": self.spec.account, "instrument": inst, "side": "BUY" if q > 0 else "SELL",
                          "offset": "OPEN", "qty": abs(q), "label": f"book:{inst}", "step": step.label}
                         for inst, q in sorted(self.spec.book.items())]
@@ -783,9 +449,7 @@ __all__ = [
     "DailySource",
     "DataSource",
     "DayPlan",
-    "MinuteSource",
     "ScenarioSource",
-    "TickSource",
     "lock_prices",
     "mark_locks",
     "official_view",

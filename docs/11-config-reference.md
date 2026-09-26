@@ -612,93 +612,31 @@ steps:
 |---|---|---|---|---|---|
 | `name` | `str` | 是 | 回测名，默认取文件名；输出目录为 `<home>/backtests/<name>-<时间戳>` | — | 每次运行时读取 |
 | `description` | `str` | 否 | 说明，`futrisk backtest list` 显示第一行 | `""` | 每次运行时读取 |
-| `kind` | `arms` \| `stress` \| `sweep` \| `scenario` | 否 | 类型：`arms` 配对实验；`stress` 每个压力窗口单独运行；`sweep` 阈值 × 动作档位扫描；`scenario` D 层合成剧本（精确断言） | `arms` | 每次运行时读取 |
-| `layer` | `A` \| `B` \| `C` \| `D` | 否 | 数据层：`A` 逐合约日线（2015 年至今）；`B` 新浪分钟线；`C` 自录 tick；`D` 合成剧本（01 §8.16） | `A` | 每次运行时读取 |
+| `kind` | `arms` \| `scenario` | 否 | 类型：`arms` 配对实验（A 层）；`scenario` D 层合成剧本（精确断言） | `arms` | 每次运行时读取 |
+| `layer` | `A` \| `D` | 否 | 数据层：`A` 逐合约日线（2015 年至今）；`D` 合成剧本（01 §8.16） | `A` | 每次运行时读取 |
 | `start` | `str` \| `null` | 否 | 起始交易日（YYYYMMDD）；`null` 为数据的第一天 | `null` | 每次运行时读取 |
 | `end` | `str` \| `null` | 否 | 结束交易日；`null` 为数据的最后一天 | `null` | 每次运行时读取 |
-| `products` | `list[str]` | 否 | 参与回测的品种 | `[rb, hc, cu, au, i, j, m, IF, IH, IC, IM, T]` | 每次运行时读取 |
+| `products` | `list[str]` | 否 | 加载历史数据的品种（各账户交易的品种会自动加入） | `[rb, hc, cu, au, i, j, m, IF, IH, IC, IM, T]` | 每次运行时读取 |
 | `accounts` | {account_id: 对象} | 否 | 回测账户，键为账户 ID | `{}` | 每次运行时读取 |
-| `accounts.{account_id}.strategy` | `str` | 是 | 策略名（同 `accounts.yaml` 的 `strategy`） | — | 每次运行时读取 |
+| `accounts.{account_id}.strategy` | `str` | 否 | 策略名：目前只有 `dual_ma`（双均线，10 文档） | `dual_ma` | 每次运行时读取 |
 | `accounts.{account_id}.products` | `list[str]` \| `null` | 否 | 策略交易的品种；`null` 取 `accounts.yaml` 的 `products` | `null` | 每次运行时读取 |
-| `accounts.{account_id}.params` | `dict[str, any]` | 否 | 策略参数（由策略自己的模型校验） | `{}` | 每次运行时读取 |
+| `accounts.{account_id}.params` | `dict[str, any]` | 否 | 策略参数（`dual_ma`：`fast`、`slow`、`band`、`notional_frac`、`cap_util`、`allow_short`） | `{}` | 每次运行时读取 |
 | `accounts.{account_id}.capital` | `decimal` \| `null` | 否 | 初始资金；`null` 取 `accounts.yaml` 的 `initial_capital` | `null` | 每次运行时读取 |
 | `accounts.{account_id}.enabled` | `bool` | 否 | `false` 时不参与 | `true` | 每次运行时读取 |
-| `accounts.{account_id}.role` | `book` \| `control` | 否 | `book` 计入 TOTAL；`control` 在每个方案中回放但单独报告（对照组） | `book` | 每次运行时读取 |
-| `accounts.{account_id}.title` | `str` | 否 | 报告中的显示名 | `""` | 每次运行时读取 |
-| `arms` | 对象列表 | 否 | 实验方案，名字唯一 | `[{name: no_rules, tier: none, threshold: null, placebo_of: null}, {name: alert_only, tier: alert_only, threshold: null, placebo_of: null}, {name: block_open, tier: block_open, threshold: null, placebo_of: null}, {name: halve, tier: halve, threshold: null, placebo_of: null}, {name: flatten, tier: flatten, threshold: null, placebo_of: null}]` | 每次运行时读取 |
+| `arms` | 对象列表 | 否 | 实验方案，名字唯一 | `[{name: no_rules, tier: none, threshold: null}, {name: block_open, tier: block_open, threshold: null}]` | 每次运行时读取 |
 | `arms[].name` | `str` | 是 | 方案名 | — | 每次运行时读取 |
-| `arms[].tier` | `none` \| `alert_only` \| `block_open` \| `halt_only` \| `halve` \| `flatten` \| `placebo` \| `production` | 否 | 动作档位：`none` 无规则；`alert_only` 只告警；`block_open` 生产规则（熔断禁开）；`halt_only` 只有熔断；`halve` / `flatten` 锁存时再减仓 50% / 100%；`placebo` 安慰剂；`production` 全部生产规则 | `block_open` | 每次运行时读取 |
+| `arms[].tier` | `none` \| `block_open` | 否 | 规则档位：`none` 不启用规则；`block_open` 生产的日亏规则（告警、限制下单、熔断禁开） | `block_open` | 每次运行时读取 |
 | `arms[].threshold` | `float` \| `null` | 否 | 熔断阈值（正数，占初始资金的比例）；`null` 取 `rules.threshold` | `null` | 每次运行时读取 |
-| `arms[].placebo_of` | `str` \| `null` | 否 | `placebo` 方案引用的方案名：在熔断没有触发的随机日子重复它的动作 | `null` | 每次运行时读取 |
 | `rules` | 对象 | 否 | 日亏损规则在各方案中的实例化方式 | 见子字段 | 每次运行时读取 |
 | `rules.threshold` | `float` | 否 | 熔断阈值（正数），默认 3% | `0.03` | 每次运行时读取 |
 | `rules.ladder` | `dict[str, float]` | 否 | 各级别相对熔断阈值的倍数：告警 2/3、限制 5/6、熔断 1、减仓 5/3 | `{warn: 0.666667, restrict: 0.833333, halt: 1, derisk: 1.66667}` | 每次运行时读取 |
-| `rules.include_other_rules` | `bool` | 否 | 是否在每个有规则的方案中加入其他生产规则（`production` 档位总是包含） | `false` | 每次运行时读取 |
-| `rules.reduce_step` | `dict[str, float]` | 否 | `halve` / `flatten` 锁存时平仓的比例 | `{halve: 0.5, flatten: 1}` | 每次运行时读取 |
 | `path` | 对象 | 否 | A 层日内路径的合成方式（01 §8.16） | 见子字段 | 每次运行时读取 |
 | `path.rule` | `open_near_extreme` \| `high_first` \| `low_first` | 否 | 极值顺序：`open_near_extreme` 开盘价靠近哪个极值先走哪个；`high_first`；`low_first` | `open_near_extreme` | 每次运行时读取 |
 | `path.points_per_leg` | `int` | 否 | 每一段（开→极值 1→极值 2→收）至少的价格点数 | `4` | 每次运行时读取 |
 | `path.max_step` | `float` | 否 | 自适应加密：每步最大涨跌幅（相对开盘价），0 表示固定点数 | `0.0025` | 每次运行时读取 |
 | `path.max_points_per_leg` | `int` | 否 | 每段最多的价格点数 | `80` | 每次运行时读取 |
-| `ensemble` | 对象 | 否 | 路径集合：用校准的随机路径模型代替确定路径 | 见子字段 | 每次运行时读取 |
-| `ensemble.paths` | `int` | 否 | 随机路径的条数 K；0 表示用 `path.rule` 的确定路径 | `0` | 每次运行时读取 |
-| `ensemble.calibration_period` | `int` | 否 | 校准极值时间和振荡幅度所用的分钟线周期 | `15` | 每次运行时读取 |
-| `ensemble.order_period` | `int` | 否 | 估计先到哪个极值的概率所用的分钟线周期 | `60` | 每次运行时读取 |
-| `ensemble.check_periods` | `list[int]` | 否 | 报告振荡拟合优度的周期 | `[5, 60]` | 每次运行时读取 |
-| `ensemble.grid_s` | `float` | 否 | 细路径的时间分辨率（交易时间秒） | `60` | 每次运行时读取 |
-| `ensemble.shrink_days` | `int` | 否 | 品种级顺序概率向合并估计收缩的伪天数 | `20` | 每次运行时读取 |
-| `ensemble.min_days` | `int` | 否 | 品种级校准至少需要的天数，不足时按时段形态合并 | `20` | 每次运行时读取 |
-| `ensemble.sigma` | `float` \| `null` | 否 | 固定振荡幅度（敏感性分析），`null` 用校准值 | `null` | 每次运行时读取 |
-| `ensemble.rho` | `float` \| `null` | 否 | 固定板块内相关（敏感性分析），`null` 用校准值 | `null` | 每次运行时读取 |
-| `ensemble.bootstrap` | `int` | 否 | 路径 × 日块联合 bootstrap 的次数 | `2000` | 每次运行时读取 |
-| `sensitivity` | 对象列表 | 否 | 敏感性变体：在本配置上叠加点号覆盖后重跑，与主结果并列报告 | `[]` | 每次运行时读取 |
-| `sensitivity[].name` | `str` | 是 | 变体名（唯一） | — | 每次运行时读取 |
-| `sensitivity[].title` | `str` | 否 | 报告中的标题 | `""` | 每次运行时读取 |
-| `sensitivity[].set` | `dict[str, any]` | 否 | 点号覆盖，如 `{path.rule: low_first}` | `{}` | 每次运行时读取 |
-| `sensitivity[].paths` | `int` \| `null` | 否 | 变体的随机路径条数；`null` 为确定路径 | `null` | 每次运行时读取 |
-| `sensitivity[].arms` | `list[str]` \| `null` | 否 | 变体要跑的方案名；`null` 为全部非安慰剂方案 | `null` | 每次运行时读取 |
 | `data` | 对象 | 否 | 数据位置 | 见子字段 | 每次运行时读取 |
 | `data.dir` | `str` \| `null` | 否 | 历史数据目录；相对路径相对应用目录（exe 所在目录，或源码仓库根目录）；`null` 为 `data/hist` | `null` | 每次运行时读取 |
-| `data.minute_period` | `int` | 否 | B 层分钟线周期：5、15 或 60 | `60` | 每次运行时读取 |
-| `data.minute_window` | `int` \| `null` | 否 | A 层只回放该周期分钟线文件共同覆盖的交易日（与 B 层在相同的日子上对照）；`null` 为日线的全部交易日 | `null` | 每次运行时读取 |
-| `data.ticks_home` | `str` \| `null` | 否 | C 层 tick 所在的 home（含 `ticks/raw/<td>/sina`）；`null` 为当前 home | `null` | 每次运行时读取 |
-| `data.tick_days` | `list[str]` | 否 | C 层回放的交易日；空表示全部已录制的交易日 | `[]` | 每次运行时读取 |
-| `analysis` | 对象 | 否 | 统计分析选项 | 见子字段 | 每次运行时读取 |
-| `analysis.horizons` | `list[int]` | 否 | 效果观察期（交易日）：d..d+h | `[0, 1, 5]` | 每次运行时读取 |
-| `analysis.bootstrap_samples` | `int` | 否 | 配对块 bootstrap 的抽样次数 | `1000` | 每次运行时读取 |
-| `analysis.bootstrap_block` | `int` | 否 | 块长度（交易日） | `20` | 每次运行时读取 |
-| `analysis.exclude_roll_days` | `bool` | 否 | 换月日不计入真假阳性统计（单独计数） | `true` | 每次运行时读取 |
-| `analysis.focus_days` | `list[str]` | 否 | 保留日内路径的交易日 | `[]` | 每次运行时读取 |
-| `analysis.intraday_trigger_days` | `int` | 否 | 最多保留多少个触发日的日内路径 | `40` | 每次运行时读取 |
-| `analysis.hit_rate` | `bool` | 否 | 是否用分钟线统计"开盘价靠近极值"规则的命中率 | `true` | 每次运行时读取 |
-| `analysis.bounding` | `bool` | 否 | 是否对静态持仓做必然 / 不确定 / 不可能触发的界定分类 | `true` | 每次运行时读取 |
-| `analysis.primary_basis` | `close` \| `settle` \| `open` | 否 | 衡量效果的价格口径：`close` 收盘价（主口径）、`settle` 结算价、`open` 次日开盘价 | `close` | 每次运行时读取 |
-| `analysis.primary_horizon` | `int` | 否 | 主观察期 h（d..d+h） | `1` | 每次运行时读取 |
-| `analysis.leave_one_out` | `bool` | 否 | 逐年、逐压力窗口剔除后重算效果 | `true` | 每次运行时读取 |
-| `analysis.multiplicity` | `holm` \| `bh` | 否 | 多账户 p 值的校正方法：`holm` 或 `bh` | `holm` | 每次运行时读取 |
-| `stress` | 对象 \| `null` | 否 | 压力窗口（`kind=stress` 时每个窗口单独运行；`arms` 时从全期结果中切片） | `null` | 每次运行时读取 |
-| `stress.windows` | 对象列表 | 否 | 窗口列表 | `[]` | 每次运行时读取 |
-| `stress.windows[].id` | `str` | 是 | 窗口 ID | — | 每次运行时读取 |
-| `stress.windows[].title` | `str` | 是 | 标题 | — | 每次运行时读取 |
-| `stress.windows[].start` | `str` \| `null` | 否 | 起始交易日 | `null` | 每次运行时读取 |
-| `stress.windows[].end` | `str` \| `null` | 否 | 结束交易日 | `null` | 每次运行时读取 |
-| `stress.windows[].focus_day` | `str` \| `null` | 否 | 重点日（保留日内路径） | `null` | 每次运行时读取 |
-| `stress.windows[].products` | `list[str]` | 否 | 窗口关注的品种 | `[]` | 每次运行时读取 |
-| `stress.windows[].note` | `str` | 否 | 备注 | `""` | 每次运行时读取 |
-| `stress.windows[].auto` | `largest_drops` \| `null` | 否 | 自动选日：`largest_drops` 取 `auto_product` 跌幅最大的 `top_n` 天 | `null` | 每次运行时读取 |
-| `stress.windows[].auto_product` | `str` \| `null` | 否 | 自动选日所用的品种 | `null` | 每次运行时读取 |
-| `stress.windows[].top_n` | `int` | 否 | 自动选取的天数 | `3` | 每次运行时读取 |
-| `stress.windows[].pad_days` | `int` | 否 | 自动选取日前后各加的交易日数 | `5` | 每次运行时读取 |
-| `stress.skipped` | `list[dict[str, str]]` | 否 | 跳过的窗口及原因（只写进报告） | `[]` | 每次运行时读取 |
-| `stress.warmup_days` | `int` | 否 | 窗口前用于指标预热的交易日数（不交易） | `80` | 每次运行时读取 |
-| `sweep` | 对象 \| `null` | 否 | 参数扫描（`kind=sweep`） | `null` | 每次运行时读取 |
-| `sweep.thresholds` | `list[float]` | 否 | 扫描的熔断阈值 | `[0.0075, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]` | 每次运行时读取 |
-| `sweep.tiers` | list[`none` \| `alert_only` \| `block_open` \| `halt_only` \| `halve` \| `flatten` \| `placebo` \| `production`] | 否 | 扫描的动作档位 | `[alert_only, block_open, halve, flatten]` | 每次运行时读取 |
-| `sweep.periods` | dict[str, list[`str` \| `null`]] | 否 | 样本期：名称 → [起, 止]（`null` 为数据末尾），默认样本内 2015-2020、样本外 2021 至今 | `{in_sample: [20150101, 20201231], out_of_sample: [20210101, null]}` | 每次运行时读取 |
-| `sweep.objectives` | list[`total_ret` \| `max_dd` \| `calmar` \| `cvar95`] | 否 | 平台 / 最优分析的目标：`total_ret`、`max_dd`、`calmar`、`cvar95` | `[total_ret, max_dd, calmar]` | 每次运行时读取 |
-| `sweep.focus_accounts` | `list[str]` | 否 | 热力图重点展示的账户（`TOTAL` 为合计） | `[ACC3, TOTAL]` | 每次运行时读取 |
-| `sweep.center` | `float` | 否 | 被检验邻域的生产阈值 | `0.03` | 每次运行时读取 |
-| `sweep.warmup_days` | `int` | 否 | 每个样本期前的预热交易日数 | `80` | 每次运行时读取 |
 | `scenarios` | 对象列表 | 否 | D 层合成剧本（`kind=scenario`），结果已知、可精确断言 | `[]` | 每次运行时读取 |
 | `scenarios[].name` | `str` | 是 | 剧本名 | — | 每次运行时读取 |
 | `scenarios[].description` | `str` | 否 | 说明 | `""` | 每次运行时读取 |
@@ -713,11 +651,9 @@ steps:
 | `scenarios[].steps[].move` | `dict[str, float]` | 否 | 合约、品种或板块 → 相对参考价的涨跌幅 | `{}` | 每次运行时读取 |
 | `scenarios[].steps[].orders` | `list[dict[str, any]]` | 否 | 该步提交的脚本委托 | `[]` | 每次运行时读取 |
 | `scenarios[].expect` | `dict[str, any]` | 否 | 期望结果（由回测和单测逐条检查） | `{}` | 每次运行时读取 |
-| `scenarios[].use_strategy` | `bool` | 否 | `true` 时运行账户的策略，而不是脚本委托 | `false` | 每次运行时读取 |
-| `seed` | `int` | 否 | 随机种子 | `20260928` | 每次运行时读取 |
-| `workers` | `int` \| `auto` | 否 | 进程池大小；`auto` 为 min(任务数, CPU 核数 − 2, 14)，`futrisk backtest run --workers` 可覆盖 | `auto` | 每次运行时读取 |
+| `seed` | `int` | 否 | 随机种子（只记入清单，回放本身是确定的） | `20260928` | 每次运行时读取 |
+| `workers` | `int` \| `auto` | 否 | 进程池大小；`auto` 为 min(任务数, CPU 核数 − 2, 14)，1 为在本进程中运行，`futrisk backtest run --workers` 可覆盖 | `auto` | 每次运行时读取 |
 | `warmup_days` | `int` | 否 | `start` 之前喂给策略的历史交易日数（不交易） | `0` | 每次运行时读取 |
-| `sizing` | `initial` \| `equity` | 否 | 策略的仓位基准：`initial` 初始资金（不复利，各方案在下次调仓时重新对齐）；`equity` 当前权益（复利） | `initial` | 每次运行时读取 |
 | `base_config` | `str` \| `null` | 否 | 基础配置目录（品种、账户、风控规则、日历）；`null` 为包内的 `config/`，相对路径相对应用目录 | `null` | 每次运行时读取 |
 <!-- gen:backtest end -->
 

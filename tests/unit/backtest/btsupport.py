@@ -65,7 +65,7 @@ class PlanSource(DataSource):
     def initial_pre_settle(self, td: str) -> dict[str, float]:
         return dict(self.specs[td].pre_settle)
 
-    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str], extras: Mapping[str, Mapping[str, str]]) -> DayPlan:
+    def plan(self, td: str, pre_settle: Mapping[str, float], held: set[str]) -> DayPlan:
         spec = self.specs[td]
         pts: list[Point] = []
         vol: dict[str, int] = {}
@@ -104,11 +104,11 @@ class PlanSource(DataSource):
 
 def scripted_replay(days: Sequence[DaySpec], *, account: str = "ACC3", capital: float = 200_000.0, tier: str = "none",
                     threshold: float = 0.03, label: str = "t") -> tuple[Replay, ArmResult]:
-    cfg = BacktestConfig(name="t", accounts={account: AccountRun(strategy="counter_trend_add", capital=capital)},
+    cfg = BacktestConfig(name="t", accounts={account: AccountRun(capital=capital)},
                          arms=[ArmSpec(name=tier, tier=tier, threshold=threshold)], workers=1)
     src = PlanSource(days)
     rep = Replay(cfg=cfg, arm=cfg.arms[0], source=src, base_rules=base().risk_rules, base_accounts=base().accounts,
-                 strategies={}, label=label, use_strategies=False, scenario_account=account)
+                 strategies={}, label=label, scenario_account=account)
     return rep, rep.run()
 
 

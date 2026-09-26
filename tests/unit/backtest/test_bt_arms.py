@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from btsupport import DaySpec, base, scripted_replay
 
-from futrisk.backtest.arms import arm_rules, reduce_fraction
+from futrisk.backtest.arms import arm_rules
 from futrisk.backtest.config import ArmSpec, BacktestConfig, load_backtest_config
 from futrisk.backtest.runner import run_config
 from futrisk.messages import codes
@@ -22,47 +22,16 @@ def test_rule_sets_per_tier() -> None:
     rules = base().risk_rules
     cfg = _cfg()
     assert arm_rules(rules, cfg, ArmSpec(name="n", tier="none")).rules == []
-    alert = arm_rules(rules, cfg, ArmSpec(name="a", tier="alert_only")).rules
-    assert [r.id for r in alert] == ["daily_loss"]
-    assert [lv.action for lv in alert[0].levels] == [Action.ALERT] * 4
-    assert [lv.threshold for lv in alert[0].levels] == pytest.approx([-0.02, -0.025, -0.03, -0.05])
-    assert alert[0].levels[2].confirm.states == 2 and alert[0].levels[2].confirm.ms == 1000
-    block = arm_rules(rules, cfg, ArmSpec(name="b", tier="block_open", threshold=0.015)).rules[0]
-    assert [lv.action for lv in block.levels] == [Action.ALERT, Action.RESTRICT, Action.CIRCUIT_BREAK, Action.LIQUIDATE]
-    assert [lv.threshold for lv in block.levels] == pytest.approx([-0.01, -0.0125, -0.015, -0.025])
-    assert block.levels[2].latch is True
-    prod = arm_rules(rules, cfg, ArmSpec(name="p", tier="production"))
-    assert len(prod.rules) == len(rules.rules)
+    block = arm_rules(rules, cfg, ArmSpec(name="b", tier="block_open", threshold=0.015)).rules
+    assert [r.id for r in block] == ["daily_loss"]
+    assert [lv.action for lv in block[0].levels] == [Action.ALERT, Action.RESTRICT, Action.CIRCUIT_BREAK, Action.LIQUIDATE]
+    assert [lv.threshold for lv in block[0].levels] == pytest.approx([-0.01, -0.0125, -0.015, -0.025])
+    assert block[0].levels[2].latch is True
+    default = arm_rules(rules, cfg, ArmSpec(name="b", tier="block_open")).rules[0]
+    assert [lv.threshold for lv in default.levels] == pytest.approx([-0.02, -0.025, -0.03, -0.05])
     sysc = arm_rules(rules, cfg, ArmSpec(name="b", tier="block_open")).system
     # the engine's periodic timers are off (0): time is driven by EngineCore.next_timer_ns alone
     assert sysc.snapshot_hz == 0 and sysc.metric_sample_s == 0 and sysc.recon_interval_s == 0
-    assert reduce_fraction(cfg, ArmSpec(name="h", tier="halve")) == 0.5
-    assert reduce_fraction(cfg, ArmSpec(name="f", tier="flatten")) == 1.0
-    assert reduce_fraction(cfg, ArmSpec(name="b", tier="block_open")) == 0.0
-
-
-def test_halt_only_keeps_the_breaker_and_turns_restrict_into_an_alert() -> None:
-    rules = base().risk_rules
-    cfg = _cfg()
-    ho = arm_rules(rules, cfg, ArmSpec(name="h", tier="halt_only")).rules[0]
-    assert [lv.name for lv in ho.levels] == ["warn", "restrict", "halt", "derisk"]
-    assert [lv.action for lv in ho.levels] == [Action.ALERT, Action.ALERT, Action.CIRCUIT_BREAK, Action.LIQUIDATE]
-    assert ho.levels[1].params == {} and ho.levels[2].latch is True
-    assert [lv.threshold for lv in ho.levels] == pytest.approx([-0.02, -0.025, -0.03, -0.05])
-    assert arm_rules(rules, cfg, ArmSpec(name="p", tier="placebo", placebo_of="x")).rules == []
-
-
-def test_halt_only_does_not_block_adds_but_halts() -> None:
-    # day 1 crosses -2.5 % (restrict) then -3 % (halt): both tiers halt (the add at 10:00 is rejected as an open
-    # while HALTED); the restrict level is a RESTRICT in block_open and only an ALERT in halt_only
-    days = crash_days()
-    _r1, blk = scripted_replay(days, capital=10_000_000.0, tier="block_open", label="b")
-    _r2, ho = scripted_replay(days, capital=10_000_000.0, tier="halt_only", label="h")
-    assert {o["label"]: o["code"] for o in ho.scripted}["add"] == codes.REJECT_ACCOUNT_HALTED
-    lv_blk = [(e["level"], e["action"]) for e in blk.events if e["kind"] == "ALERT_RAISED"]
-    lv_ho = [(e["level"], e["action"]) for e in ho.events if e["kind"] == "ALERT_RAISED"]
-    assert ("restrict", "RESTRICT") in lv_blk and ("restrict", "ALERT") in lv_ho
-    assert ("halt", "CIRCUIT_BREAK") in lv_ho
 
 
 RB = "rb2701"
@@ -114,12 +83,11 @@ def test_determinism_same_config_same_hashes(tmp_path: Path) -> None:
     assert a.manifest["events_hash"] == b.manifest["events_hash"]
     assert a.manifest["summary_hash"] == b.manifest["summary_hash"]
     assert a.manifest["config_hash"] == b.manifest["config_hash"]
-    for name in ("events.parquet", "daily.parquet", "orders.parquet", "states.parquet"):
+    for name in ("events.csv", "daily.csv", "orders.csv", "summary.json"):
         assert (tmp_path / "a" / name).read_bytes() == (tmp_path / "b" / name).read_bytes(), name
 
 
 def test_determinism_of_a_multi_day_replay() -> None:
-    r1 = scripted_replay(crash_days(), capital=10_000_000.0, tier="halve", label="x")[1]
-    r2 = scripted_replay(crash_days(), capital=10_000_000.0, tier="halve", label="x")[1]
-    assert r1.events == r2.events and r1.daily == r2.daily and r1.orders == r2.orders and r1.actions == r2.actions
-    assert r1.actions and r1.actions[0]["qty"] == 125  # halve: ceil(250 * 0.5)
+    r1 = scripted_replay(crash_days(), capital=10_000_000.0, tier="block_open", label="x")[1]
+    r2 = scripted_replay(crash_days(), capital=10_000_000.0, tier="block_open", label="x")[1]
+    assert r1.events and r1.events == r2.events and r1.daily == r2.daily and r1.orders == r2.orders

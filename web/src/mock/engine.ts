@@ -786,15 +786,14 @@ export class MockEngine {
       }
       this.backtests.set(run_id, b)
     }
-    mk('bt-0192a1', 'stress_2016_black_crash', 'DONE', 1, 3, {
-      rules: { total_return: 0.0412, max_drawdown: 0.0613, calmar: 1.84, triggers: 7, avoided_loss: 1_284_000, false_positive_rate: 0.14 },
-      no_rules: { total_return: 0.0187, max_drawdown: 0.1421, calmar: 0.52, triggers: 0 },
+    mk('bt-0192a1', 'default', 'DONE', 1, 3, {
+      baseline: 'no_rules',
+      days: 2852,
+      no_rules: { total_ret: 0.4344, max_dd: 0.0781, worst_day: -0.0229, latched_days: 0, blocked_opens: 0 },
+      block_open: { total_ret: 0.4351, max_dd: 0.0783, worst_day: -0.0224, latched_days: 40, blocked_opens: 11, rule_days: 100, effect_sum: 0.0091, next_effect_sum: -0.0061 },
     })
-    mk('bt-0192b7', 'stress_2021_coke', 'DONE', 1, 2, {
-      rules: { total_return: 0.0233, max_drawdown: 0.0481, calmar: 1.62, triggers: 4, avoided_loss: 612_000, false_positive_rate: 0.25 },
-      no_rules: { total_return: -0.0115, max_drawdown: 0.0962, calmar: -0.4, triggers: 0 },
-    })
-    mk('bt-0192c3', 'param_sweep_daily_loss', 'RUNNING', 0.35, 0, null)
+    mk('bt-0192b7', 'breaker_synthetic', 'DONE', 1, 2, { checks: 16, passed: 16, all_passed: true })
+    mk('bt-0192c3', 'default', 'RUNNING', 0.35, 0, null)
   }
 
   // ---------------------------------------------------------------- step
@@ -2306,13 +2305,16 @@ export class MockEngine {
       } else if (b.state === 'RUNNING') {
         // WS `backtests` (state topic, 1 Hz): progress upserts
         if (this.stepCount % 2 === 0) this.publishBacktest(b)
-        b.progress = Math.min(1, (b.progress ?? 0) + (b.name === 'param_sweep_daily_loss' ? 0.002 : 0.02))
+        b.progress = Math.min(1, (b.progress ?? 0) + (b.run_id === 'bt-0192c3' ? 0.002 : 0.02))
         if ((b.progress ?? 0) >= 1) {
           b.state = 'DONE'
           b.finished_ns = this.nowNs()
+          const ret = Number(this.rng.range(-0.02, 0.06).toFixed(4))
           const summary = {
-            rules: { total_return: Number(this.rng.range(0.01, 0.06).toFixed(4)), max_drawdown: Number(this.rng.range(0.03, 0.07).toFixed(4)), calmar: Number(this.rng.range(1, 2.4).toFixed(2)), triggers: this.rng.int(2, 9) },
-            no_rules: { total_return: Number(this.rng.range(-0.02, 0.03).toFixed(4)), max_drawdown: Number(this.rng.range(0.08, 0.16).toFixed(4)), calmar: Number(this.rng.range(-0.3, 0.8).toFixed(2)), triggers: 0 },
+            baseline: 'no_rules',
+            days: 244,
+            no_rules: { total_ret: ret, max_dd: Number(this.rng.range(0.03, 0.08).toFixed(4)), worst_day: -0.0229, latched_days: 0, blocked_opens: 0 },
+            block_open: { total_ret: Number((ret + this.rng.range(-0.002, 0.004)).toFixed(4)), max_dd: Number(this.rng.range(0.03, 0.08).toFixed(4)), worst_day: -0.0224, latched_days: this.rng.int(2, 9), blocked_opens: this.rng.int(0, 5), rule_days: this.rng.int(4, 20), effect_sum: Number(this.rng.range(-0.002, 0.006).toFixed(4)), next_effect_sum: Number(this.rng.range(-0.004, 0.004).toFixed(4)) },
           }
           b.summary = summary
           const r = this.newReport(null, 'BACKTEST_HTML', null, b.run_id, this.nowNs())

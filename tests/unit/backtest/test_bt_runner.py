@@ -20,7 +20,6 @@ def small_config(tmp_path: Path) -> Path:
     raw = yaml.safe_load(resolve_config_path("breaker_synthetic").read_text(encoding="utf-8"))
     raw["name"] = "tiny"
     raw["scenarios"] = raw["scenarios"][:1]
-    raw["arms"] = [a for a in raw["arms"] if a["name"] in ("no_rules", "block_open")]
     p = tmp_path / "tiny.yaml"
     p.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return p
@@ -36,7 +35,7 @@ def test_run_job_contract(tmp_path: Path) -> None:
     assert len(res["config_hash"]) == 64 and len(res["data_hash"]) == 64
     assert res["git_sha"] == "nogit" or len(res["git_sha"]) == 40
     assert res["seed"] == 20260928 and res["report_path"] == "report.html"
-    for name in ("report.html", "metrics.csv", "events.parquet", "manifest.json"):
+    for name in ("report.html", "daily.csv", "events.csv", "manifest.json"):
         assert (out / name).exists(), name
     fracs = [f for f, _m in calls]
     assert fracs[0] == 0.0 and fracs[-1] == 1.0
@@ -46,7 +45,7 @@ def test_run_job_contract(tmp_path: Path) -> None:
 
 
 def test_run_job_in_a_spawn_process_pool_with_its_own_pool(tmp_path: Path) -> None:
-    # the clearing-worker's spawn worker runs the job, whose scheduler starts a second (nested) spawn pool
+    # the clearing-worker's spawn worker runs the job, whose runner starts a second (nested) spawn pool
     cfg = small_config(tmp_path)
     out = tmp_path / "pool"
     with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn")) as pool:
@@ -74,7 +73,7 @@ def test_cli_run_breaker_synthetic(tmp_path: Path) -> None:
     r = CliRunner().invoke(app, ["backtest", "run", "breaker_synthetic", "--out", str(out)])
     assert r.exit_code == 0, r.output
     assert "16/16" in r.output
-    assert (out / "report.html").exists() and (out / "events.parquet").exists()
+    assert (out / "report.html").exists() and (out / "events.csv").exists()
     r2 = CliRunner().invoke(app, ["backtest", "show", str(out)])
     assert r2.exit_code == 0 and "events_hash" in r2.output
     r3 = CliRunner().invoke(app, ["backtest", "list"])

@@ -1,4 +1,4 @@
-"""Historical data loaders for the backtest (layers A and B, ``data/hist``; 01 §8.16 数据分层).
+"""Historical data loader for the backtest (layer A, ``data/hist``; 01 §8.16 数据分层).
 
 Everything here is read-only: the files under ``data/hist`` are produced by
 ``scripts/fetch_hist.py`` (``data/hist/SOURCES.md``) and may be refreshed while
@@ -27,10 +27,6 @@ silently:
   previous-day bar, else its own open; a DCE roll's back-adjustment factor
   (new contract's previous settle ÷ old contract's settle) uses that estimate
   (:meth:`ProductSeries.roll_source` says ``estimated`` / ``open``).
-
-Layer B: ``minute/{product}_{period}m.parquet`` Sina main-continuous bars
-labelled with their end time (``ts_ns``); rows flagged ``offsession_label`` are
-dropped.
 """
 
 from __future__ import annotations
@@ -185,22 +181,6 @@ class ProductSeries:
             return self.est_source[i]
         return "none"
 
-    def raw_change(self, td: str) -> float | None:
-        """settle ÷ previous row's settle − 1 (includes the roll gap on roll days)."""
-        i = self.index.get(td)
-        if i is None or not self.pre_settle[i]:
-            return None
-        return self.settle[i] / self.pre_settle[i] - 1.0
-
-    def same_contract_change(self, td: str) -> float | None:
-        """settle ÷ the same contract's previous settle − 1 (no roll gap); None when unknown."""
-        i = self.index.get(td)
-        if i is None:
-            return None
-        cps = self.contract_pre_settle[i]
-        if cps is None or not cps:
-            return None
-        return self.settle[i] / cps - 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,20 +198,8 @@ class DailyBar:
     roll: bool
 
 
-@dataclass(frozen=True, slots=True)
-class MinuteBar:
-    ts_ns: int  # bar end (Sina label)
-    trading_day: str
-    instrument_id: str | None
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-
-
 class HistData:
-    """Layer A (and B) data of a set of products, loaded read-only from ``data_dir``."""
+    """Layer A data of a set of products, loaded read-only from ``data_dir``."""
 
     def __init__(
         self,
@@ -241,7 +209,6 @@ class HistData:
         *,
         start: str | None = None,
         end: str | None = None,
-        all_contract_products: Iterable[str] = (),
     ) -> None:
         self.data_dir = Path(data_dir)
         self.base_products = base_products
@@ -252,14 +219,12 @@ class HistData:
         self.series: dict[str, ProductSeries] = {}
         self._bars: dict[tuple[str, str], Bar] = {}
         self._contract_days: dict[str, list[str]] = {}
-        self._contracts_by_product_day: dict[tuple[str, str], list[str]] = {}
-        wanted_all = set(all_contract_products)
         for p in products:
             if p not in base_products.products:
                 self.notes.append(f"{p}: not in products.yaml, skipped")
                 continue
             try:
-                self._load_product(p, full=p in wanted_all)
+                self._load_product(p)
             except FileNotFoundError as exc:
                 self.notes.append(f"{p}: data missing ({exc.filename or exc}), skipped")
         self.start = start
@@ -289,7 +254,7 @@ class HistData:
                 return True
         return False
 
-    def _load_product(self, p: str, *, full: bool) -> None:
+    def _load_product(self, p: str) -> None:
         spec = self.base_products.products[p]
         exch = spec.exchange
         tick = spec.tick_size
@@ -338,8 +303,7 @@ class HistData:
                 is_main=True,
             )
         if pc is not None and len(pc):
-            if not full:
-                pc = pc[pc["instrument_id"].isin(mains)]
+            pc = pc[pc["instrument_id"].isin(mains)]  # the contracts that are a main on some day
             n = len(pc)
             tds = [str(x) for x in pc["trading_day"].tolist()]
             insts = [str(x) for x in pc["instrument_id"].tolist()]
@@ -351,7 +315,6 @@ class HistData:
                 td, inst = tds[k], insts[k]
                 key = (td, inst)
                 self._contract_days.setdefault(inst, []).append(td)
-                self._contracts_by_product_day.setdefault((p, td), []).append(inst)
                 ps = pres[k]
                 existing = self._bars.get(key)
                 if existing is not None:
@@ -432,24 +395,12 @@ class HistData:
         hi = end or self.end or "99999999"
         return [d for d in self.all_days if lo <= d <= hi]
 
-    def days_before(self, td: str, n: int) -> list[str]:
-        days = self.all_days
-        out = [d for d in days if d < td]
-        return out[-n:] if n > 0 else []
-
     def main(self, product: str, td: str) -> str | None:
         s = self.series.get(product)
         return s.main_of(td) if s is not None else None
 
     def bar(self, td: str, instrument_id: str) -> Bar | None:
         return self._bars.get((td, instrument_id))
-
-    def instruments_of(self, product: str) -> set[str]:
-        """Every contract of ``product`` with a bar in the loaded data."""
-        return {inst for (_td, inst), b in self._bars.items() if b.product == product}
-
-    def contracts_on(self, product: str, td: str) -> list[str]:
-        return sorted(self._contracts_by_product_day.get((product, td), []))
 
     def contract_last_day(self, instrument_id: str) -> str | None:
         days = self._contract_days.get(instrument_id)
@@ -508,25 +459,6 @@ class HistData:
             )
         return out
 
-    def far_contract(self, product: str, td: str, near: str) -> str | None:
-        """The calendar-spread far leg on ``td``: of the later contracts than ``near`` that trade on ``td``, the one
-        with the largest open interest on the **previous** trading day (known before the open; no look-ahead)."""
-        s = self.series.get(product)
-        prev = s.prev_day(td) if s is not None else None
-        best: tuple[int, str] | None = None
-        for inst in self.contracts_on(product, td):
-            if inst <= near:
-                continue
-            b = self._bars.get((td, inst))
-            if b is None or not b.traded or b.settle is None:
-                continue
-            pb = self._bars.get((prev, inst)) if prev else None
-            oi = pb.open_interest if pb is not None else 0
-            cand = (oi, inst)
-            if best is None or cand[0] > best[0]:
-                best = cand
-        return best[1] if best is not None else None
-
     # ------------------------------------------------------------ universe
     def calendar(self, base: TradingCalendar | None = None) -> TradingCalendar:
         """Trading days of the data (plus the base calendar's days) with the products' session templates."""
@@ -549,20 +481,6 @@ class HistData:
     def file_hashes(self) -> dict[str, str]:
         """SHA-256 of every file this instance read, taken when it was read (the data the run actually used)."""
         return dict(sorted(self.file_sha.items()))
-
-    # ------------------------------------------------------------- layer B
-    def minute_bars(self, product: str, period: int) -> list[MinuteBar]:
-        """Sina minute bars of ``product`` (layer B), sorted by bar end."""
-        df = self._read(f"minute/{product}_{period}m.parquet")
-        if "quality" in df.columns:
-            df = df[df["quality"].fillna("") != "offsession_label"]
-        df = df.sort_values("ts_ns")
-        out: list[MinuteBar] = []
-        for r in df.itertuples(index=False):
-            iid = r.instrument_id if isinstance(r.instrument_id, str) else None
-            out.append(MinuteBar(int(r.ts_ns), str(r.trading_day), iid, float(r.open), float(r.high), float(r.low),
-                                 float(r.close), _i(r.volume)))
-        return out
 
 
 def list_instruments(
@@ -626,7 +544,6 @@ __all__ = [
     "Bar",
     "DailyBar",
     "HistData",
-    "MinuteBar",
     "ProductSeries",
     "list_instruments",
     "round_price",

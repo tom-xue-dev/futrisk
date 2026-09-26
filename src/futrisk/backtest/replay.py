@@ -8,32 +8,21 @@ For every trading day:
 2. **replay**: the day's market states in time order become ``Tick``s
    (``apply_mark``); the engine evaluates the dirty accounts after every state
    (``evaluate_dirty``); confirm / hold / cooldown timers run at their due time
-   (``on_timer``); the strategies see the engine's view (equity, positions,
-   account state) and send orders through the same pre-trade path
+   (``on_timer``); the strategies see the engine's view (positions, account
+   state) and send orders through the same pre-trade path
    (``handle(order.submit)``). Every effect goes over the :class:`InprocBus`:
    ``Route`` / ``CancelRoute`` become requests to the in-process broker
    (:mod:`futrisk.backtest.broker`), whose ``td.exec.{account}`` FACTs come back
    through ``apply_exec``; the outbox (``risk.event``, ``risk.state.*``, ...) is
    published as FACTs and recorded;
-3. **settlement prices**: official prices (layers A and B) or the 01 §8.15
-   methods on the replayed tape (C, D);
+3. **settlement prices**: official prices (layer A) or the 01 §8.15 methods on
+   the replayed tape (layer D);
 4. **clearing**: ``core.freeze`` (EOD digest, checked against the broker's
    trades), then :func:`futrisk.core.settle_day` gives the day's settlement and
    the next SOD.
 
 Account equity, daily P&L and the risk events come from the engine and the
-clearing library; the backtest never recomputes them. The ``halve`` /
-``flatten`` tiers act when the daily-loss halt level latches: they submit the
-closing orders of the production liquidation planner through the engine. A
-``placebo`` arm halts an account at scheduled times through the engine's
-manual ``risk.halt`` (released by the next day roll) and applies the imitated
-arm's reduction.
-
-Besides the settlement equity, every account-day records the engine equity at
-the start of day (``engine_equity_sod``), once every contract of the SOD book
-has had its first market state (``engine_equity_open``) and after the last state
-(``engine_equity_close``), so an effect can be measured at the close, at the
-settlement price or at the next open.
+clearing library; the backtest never recomputes them.
 """
 
 from __future__ import annotations
@@ -44,21 +33,19 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
-from futrisk.backtest.arms import DAILY_LOSS, HALT_LEVEL, arm_rules, reduce_fraction
+from futrisk.backtest.arms import DAILY_LOSS, HALT_LEVEL, arm_rules
 from futrisk.backtest.broker import InprocBroker
 from futrisk.backtest.config import ArmSpec, BacktestConfig
-from futrisk.backtest.executor import Executor, PosInfo, pos_info
-from futrisk.backtest.paths import CERTAIN, Leg, Point, TickGrid, classify, pnl_bounds
+from futrisk.backtest.executor import Executor, pos_info
+from futrisk.backtest.paths import Point, TickGrid
 from futrisk.backtest.sources import DataSource, DayPlan
-from futrisk.backtest.strategies import CalendarSpread, Quote, Strategy, StrategyContext
-from futrisk.backtest.timing import wall_s
+from futrisk.backtest.strategies import Quote, Strategy, StrategyContext
 from futrisk.bus.inproc import InprocBus
 from futrisk.common.clock import BJ, SimClock, ns_to_bj
 from futrisk.common.config.accounts import AccountsConfig, AccountSpec
 from futrisk.common.config.risk_rules import RiskRulesConfig
 from futrisk.common.decimals import D
 from futrisk.common.ids import SeqIdGen
-from futrisk.core.actions import LiquidationCandidate, liquidation_steps
 from futrisk.core.effects import (
     CancelRoute,
     CommandCtx,
@@ -74,15 +61,7 @@ from futrisk.core.engine import EngineCore
 from futrisk.core.risk_account import Lifecycle
 from futrisk.core.settlement import SettlementError, seed_sod, settle_day
 from futrisk.messages import codes
-from futrisk.messages.enums import (
-    AccountState,
-    Direction,
-    Offset,
-    PosDirection,
-    RiskEventKind,
-    Role,
-    SourceId,
-)
+from futrisk.messages.enums import AccountState, Direction, Offset, PosDirection, RiskEventKind, SourceId
 from futrisk.messages.envelope import Envelope, Reply, err_reply, open_payload
 from futrisk.messages.eod import SettlementPriceView, SodSnapshot
 from futrisk.messages.md import FLAG_LIMIT_DOWN_LOCKED, FLAG_LIMIT_UP_LOCKED, Tick
@@ -94,13 +73,14 @@ from futrisk.messages.orders import (
     Trade,
     compute_account_digest,
 )
-from futrisk.messages.risk import AccountStateChanged, HaltRequest, RiskEvent
+from futrisk.messages.risk import AccountStateChanged, RiskEvent
 
 NS_PER_S = 1_000_000_000
 NS_PER_DAY = 86_400 * NS_PER_S
 BJ_OFFSET_NS = 8 * 3600 * NS_PER_S
 ENGINE = "risk-engine-bt"
 GATEWAY = "trade-gateway"
+LEVELS = ("warn", "restrict", "halt", "derisk")
 
 
 @dataclass
@@ -116,10 +96,6 @@ class ArmStats:
     digest_mismatches: int = 0
     settle_failed_checks: int = 0
     settle_errors: list[str] = field(default_factory=list)
-    replay_s: float = 0.0  # market states: marks + evaluation + strategies + orders
-    settle_s: float = 0.0  # freeze + settle_day + roll
-    plan_s: float = 0.0  # data -> day plans
-    strategy_s: float = 0.0  # strategy + executor (incl. pre-trade and fills), part of replay_s
 
     def to_dict(self) -> dict[str, Any]:
         d = dict(self.__dict__)
@@ -143,8 +119,6 @@ class ArmResult:
     events: list[dict[str, Any]] = field(default_factory=list)
     states: list[dict[str, Any]] = field(default_factory=list)
     orders: list[dict[str, Any]] = field(default_factory=list)
-    actions: list[dict[str, Any]] = field(default_factory=list)
-    intraday: dict[str, list[tuple[int, float]]] = field(default_factory=dict)  # "td|account" -> [(ts, pct)]
     scripted: list[dict[str, Any]] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
@@ -178,11 +152,8 @@ class Replay:
         strategies: Mapping[str, Strategy],
         label: str,
         config_hash: str = "",
-        record_days: set[str] | None = None,
         progress: Callable[[float, str | None], None] | None = None,
-        use_strategies: bool = True,
         scenario_account: str | None = None,
-        placebo: Mapping[str, Mapping[str, float]] | None = None,
         record_orders: bool = True,
     ) -> None:
         self.cfg = cfg
@@ -191,12 +162,8 @@ class Replay:
         self.registry = source.registry
         self.label = label
         self.progress = progress
-        self.use_strategies = use_strategies
         self.rules: RiskRulesConfig = arm_rules(base_rules, cfg, arm)
         self.threshold = cfg.threshold_of(arm)
-        self.reduce_frac = reduce_fraction(cfg, arm)
-        # placebo schedule: account -> trading day -> fraction of the account's trading day at which it is halted
-        self.placebo = {a: dict(v) for a, v in (placebo or {}).items()}
         self.record_orders = record_orders
         self.strategies = dict(strategies)
         accts = sorted(self.strategies) if self.strategies else ([scenario_account] if scenario_account else [])
@@ -238,33 +205,20 @@ class Replay:
             capital={a: float(c) for a, c in self.capital.items()},
         )
         self.stats = ArmStats()
-        self.record_days = set(record_days or ())
         self._replies: dict[Any, Reply] = {}
         self._ad_cache: dict[int, str] = {}
         self._grids: dict[str, TickGrid] = {}
         # per-day state
         self.td = ""
-        self.plan: DayPlan | None = None
         self.last_px: dict[str, float] = {}
         self.day_open: dict[str, float] = {}
         self.day_hi: dict[str, float] = {}
         self.day_lo: dict[str, float] = {}
         self.replayed: dict[str, list[Point]] = {}
         self.live_now: set[str] = set()
-        self.cur_kinds: dict[str, str] = {}
         self.cur_label: str | None = None
-        self.pending_reduce: dict[str, list[tuple[str, Direction, Offset, int]]] = {}
-        self.reduced_keys: set[str] = set()
         self.day_flags: dict[str, dict[str, Any]] = {}
-        self.samples: dict[str, list[tuple[int, float]]] = {}
         self.sod_equity: dict[str, float] = {}
-        self.open_equity: dict[str, float] = {}
-        self.open_need: dict[str, set[str]] = {}
-        self.acct_span: dict[str, tuple[int, int]] = {}  # first / last state of the account's contracts today
-        self.placebo_due: dict[str, int] = {}  # account -> halt time today (placebo arms)
-        self.prev_actions: dict[str, list[dict[str, Any]]] = {}  # yesterday's tier actions waiting for the next open
-        self.extras_req = {a: s.extra_instruments("", {}) for a, s in self.strategies.items() if s.extra_instruments("", {})}
-        self.intraday_budget = cfg.analysis.intraday_trigger_days
 
     # ============================================================ effects
     def _run(self, effects: list[Effect]) -> None:
@@ -316,30 +270,9 @@ class Replay:
             self._record_state(msg)
 
     # ============================================================ recording
-    def _kinds_str(self) -> str:
-        return ",".join(sorted(set(self.cur_kinds.values())))
-
-    def _at_open(self, account_id: str | None) -> bool:
-        """The current state is the opening state of a contract the account holds or trades today."""
-        if account_id is None:
-            return False
-        opened = {i for i, k in self.cur_kinds.items() if k == "O"}
-        if not opened:
-            return False
-        ra = self.core.account(account_id)
-        held = {i for i, _d, _q in ra.ledger.held()}
-        plan = self.plan
-        strat = self.strategies.get(account_id)
-        mains = {plan.mains.get(p) for p in (strat.products if strat else [])} if plan else set()
-        return bool(opened & (held | mains))
-
     def _record_event(self, ev: RiskEvent) -> None:
         acct = ev.account_id
-        at_open = self._at_open(acct)
-        if acct is not None and ev.level == HALT_LEVEL and ev.rule_id == DAILY_LOSS:
-            # a circuit break is raised at its confirmation; the gap question belongs to the first breach
-            at_open = bool(self.day_flags.get(acct, {}).get("halt_breach_open", at_open))
-        row = {
+        self.result.events.append({
             "arm": self.arm.name,
             "tier": self.arm.tier,
             "threshold": self.threshold,
@@ -357,30 +290,15 @@ class Replay:
             "threshold_value": ev.threshold,
             "alert_key": ev.alert_key,
             "episode": ev.episode,
-            "at_open": at_open,
-            "point_kinds": self._kinds_str(),
             "step": self.cur_label,
             "message": ev.message,
-        }
-        self.result.events.append(row)
-        if acct is not None and ev.kind == RiskEventKind.MANUAL_HALT:
-            self.day_flags.setdefault(acct, {}).setdefault("placebo_ts", ev.ts_ns)
+        })
         if acct is not None and ev.kind == RiskEventKind.ALERT_RAISED and ev.rule_id == DAILY_LOSS:
             f = self.day_flags.setdefault(acct, {})
             f.setdefault(f"trig_{ev.level}", ev.ts_ns)
-            f.setdefault(f"trig_{ev.level}_open", row["at_open"])
             f.setdefault(f"trig_{ev.level}_value", ev.value)
             if ev.level == HALT_LEVEL and ev.latched:
                 f.setdefault("latch_ts", ev.ts_ns)
-            if (
-                ev.level == HALT_LEVEL
-                and ev.latched
-                and self.reduce_frac > 0
-                and ev.alert_key is not None
-                and ev.alert_key not in self.reduced_keys
-            ):
-                self.reduced_keys.add(ev.alert_key)
-                self.pending_reduce[acct] = self._reduce_steps(acct)
 
     def _record_state(self, st: AccountStateChanged) -> None:
         self.result.states.append({
@@ -397,18 +315,13 @@ class Replay:
             "restrictions": ",".join(sorted({r.kind.value for r in st.restrictions})),
             "step": self.cur_label,
         })
+        f = self.day_flags.setdefault(st.account_id, {})
         if st.to_state == AccountState.HALTED:
-            f = self.day_flags.setdefault(st.account_id, {})
             f["halted"] = True
-            f.setdefault("halt_first_ns", st.ts_ns)
-            if not st.halted_latched and st.from_state != AccountState.HALTED:
-                f["halt_breach_open"] = self._at_open(st.account_id)  # the breach that the latch will confirm
             if st.halted_latched:
                 f["halt_latched"] = True
-        elif st.from_state == AccountState.HALTED and not st.halted_latched:
-            f = self.day_flags.setdefault(st.account_id, {})
-            if not f.get("halt_latched"):
-                f["halt_revoked"] = f.get("halt_revoked", 0) + 1
+        elif st.from_state == AccountState.HALTED and not st.halted_latched and not f.get("halt_latched"):
+            f["halt_revoked"] = f.get("halt_revoked", 0) + 1
 
     # ============================================================ orders
     def _submit(self, req: OrderRequest, purpose: str) -> Reply:
@@ -420,83 +333,33 @@ class Replay:
         if reply is None:
             reply = err_reply(codes.INTERNAL, "no reply")
         self.stats.orders += 1
-        if not reply.ok:
-            self.stats.rejects += 1
         f = self.day_flags.setdefault(req.account_id, {})
         f["orders"] = f.get("orders", 0) + 1
         if not reply.ok:
+            self.stats.rejects += 1
             f["rejects"] = f.get("rejects", 0) + 1
             if reply.code == codes.REJECT_ACCOUNT_HALTED:
                 f["blocked_opens"] = f.get("blocked_opens", 0) + 1
             elif reply.code == codes.REJECT_ADD_TO_LOSER:
                 f["blocked_adds"] = f.get("blocked_adds", 0) + 1
-        if not self.record_orders:
-            return reply
-        self.result.orders.append({
-            "arm": self.arm.name,
-            "trading_day": self.td,
-            "ts_ns": now,
-            "account_id": req.account_id,
-            "client_order_id": req.client_order_id,
-            "instrument_id": req.instrument_id,
-            "direction": req.direction.value,
-            "offset": req.offset.value,
-            "qty": req.qty,
-            "price": req.price,
-            "purpose": purpose,
-            "ok": reply.ok,
-            "code": reply.code,
-            "step": self.cur_label,
-        })
+        if self.record_orders:
+            self.result.orders.append({
+                "arm": self.arm.name,
+                "trading_day": self.td,
+                "ts_ns": now,
+                "account_id": req.account_id,
+                "client_order_id": req.client_order_id,
+                "instrument_id": req.instrument_id,
+                "direction": req.direction.value,
+                "offset": req.offset.value,
+                "qty": req.qty,
+                "price": req.price,
+                "purpose": purpose,
+                "ok": reply.ok,
+                "code": reply.code,
+                "step": self.cur_label,
+            })
         return reply
-
-    def _reduce_steps(self, acct: str) -> list[tuple[str, Direction, Offset, int]]:
-        """Closing orders of the halve / flatten tier: the production liquidation planner on the current book."""
-        ra = self.core.account(acct)
-        cands: list[LiquidationCandidate] = []
-        for pos in ra.ledger.book.positions(acct):
-            if pos.qty <= 0:
-                continue
-            c = pos.closable()
-            cands.append(LiquidationCandidate(
-                instrument_id=pos.instrument_id, direction=pos.direction, closable_today=c.today, closable_yd=c.yd,
-                position_pnl=ra.ledger.position_pnl_of(pos.key),
-                explicit_close_today=self.registry.explicit_close_today(pos.instrument_id),
-            ))
-        steps = liquidation_steps(cands, step=self.reduce_frac, price_ticks=0)
-        return [(s.instrument_id, s.direction, s.offset, s.qty) for s in steps]
-
-    def _placebo_halt(self, acct: str) -> None:
-        """Placebo arms: halt the account now through the engine (manual circuit break) and queue the reduction."""
-        now = self.clock.now_ns()
-        req = HaltRequest(command_id=f"{self.label}-placebo-{self.td}-{acct}", account_id=acct,
-                          reason="placebo: the imitated arm's breaker action on a day without a trigger",
-                          actor="backtest-placebo", role=Role.RISK_MANAGER)
-        ctx = CommandCtx("risk.halt", token=req.command_id, requester="backtest-placebo", received_ns=now)
-        self._run(self.core.handle(req, ctx))
-        self._replies.pop(req.command_id, None)
-        if self.reduce_frac > 0:
-            self.pending_reduce[acct] = self._reduce_steps(acct)
-
-    def _tier_actions(self) -> None:
-        if not self.pending_reduce:
-            return
-        for acct in sorted(self.pending_reduce):
-            steps = self.pending_reduce[acct]
-            live = [s for s in steps if s[0] in self.live_now]
-            if not live:
-                continue
-            done = self.executors[acct].reduce(live, self.last_px, self.live_now, purpose=f"tier:{self.arm.tier}")
-            ok = {(inst, d, o) for inst, d, o, _q, acc, _c in done if acc > 0}
-            for inst, d, o, q, acc, code in done:
-                self.result.actions.append({
-                    "arm": self.arm.name, "trading_day": self.td, "ts_ns": self.clock.now_ns(), "account_id": acct,
-                    "instrument_id": inst, "direction": d.value, "offset": o.value, "qty": q, "accepted": acc,
-                    "price": self.last_px.get(inst), "code": code,
-                })
-            self.pending_reduce[acct] = [s for s in steps if (s[0], s[1], s[2]) not in ok]
-            if not self.pending_reduce[acct]:
-                del self.pending_reduce[acct]
 
     # ============================================================ market states
     def _grid(self, inst: str) -> TickGrid:
@@ -556,69 +419,44 @@ class Replay:
             self.clock.set(now)
             self.stats.timer_runs += 1
             self._run(self.core.on_timer(now))
-            self._tier_actions()
 
     def _state(self, ts: int, group: list[Point], plan: DayPlan) -> None:
         self._timers_until(ts)
         if ts > self.clock.now_ns():
             self.clock.set(ts)
         live: set[str] = set()
-        kinds: dict[str, str] = {}
-        first_today = False
         for p in group:
             inst = p.instrument_id
             self.core.apply_mark(self._tick(p, plan))
             self.broker.set_market(inst, p.price, ts, locked_up=bool(p.flags & FLAG_LIMIT_UP_LOCKED),
                                    locked_down=bool(p.flags & FLAG_LIMIT_DOWN_LOCKED))
             self.last_px[inst] = p.price
-            if inst not in self.day_open:
-                self.day_open[inst] = p.price
-                first_today = True
-                for act in self.prev_actions.pop(inst, ()):
-                    act["next_open"] = p.price
+            self.day_open.setdefault(inst, p.price)
             self.day_hi[inst] = max(self.day_hi.get(inst, p.price), p.price)
             self.day_lo[inst] = min(self.day_lo.get(inst, p.price), p.price)
             self.replayed.setdefault(inst, []).append(p)
             live.add(inst)
-            kinds[inst] = p.kind
         self.live_now = live
-        self.cur_kinds = kinds
         self.cur_label = plan.labels.get(ts)
         self.stats.ticks += len(group)
         self.stats.states += 1
         self._run(self.core.evaluate_dirty())
-        if first_today and self.open_need:
-            # equity once every contract of the SOD book has had its first state (the SOD book at the open)
-            for a in [a for a, need in self.open_need.items() if need <= self.day_open.keys()]:
-                self.open_equity[a] = self.core.account(a).ledger.funds().equity
-                del self.open_need[a]
         if self.broker.working():
             for inst in sorted(live):
                 if self.broker.working(inst):
                     self.broker.match(inst)
             self._run(self.core.evaluate_dirty())
-        self._tier_actions()
-        if self.placebo_due:
-            for a in [a for a, due in sorted(self.placebo_due.items()) if ts >= due]:
-                del self.placebo_due[a]
-                self._placebo_halt(a)
-            self._tier_actions()
         for order in plan.scripted.get(ts, []):
             self._scripted(order)
-        if self.use_strategies:
-            t0 = wall_s()
+        if self.strategies:
             for acct in self.accounts:
                 self._strategy_step(acct, ts, live, plan)
-            self.stats.strategy_s += wall_s() - t0
             self._run(self.core.evaluate_dirty())
-            self._tier_actions()
-        self._sample(ts)
 
     def _strategy_step(self, acct: str, ts: int, live: set[str], plan: DayPlan) -> None:
         strat = self.strategies[acct]
-        extra_insts = plan.extras.get(acct, {})
         mains = {pr: plan.mains[pr] for pr in strat.products if pr in plan.mains}
-        if not (set(mains.values()) & live) and not (set(extra_insts.values()) & live):
+        if not set(mains.values()) & live:
             return
         ra = self.core.account(acct)
         net: dict[str, int] = {}
@@ -629,22 +467,15 @@ class Replay:
                       inst in live, inst in live and len(self.replayed.get(inst, ())) == 1)
             for pr, inst in mains.items()
         }
-        extra = {
-            alias: Quote(self.registry.product(inst), inst, self.last_px.get(inst) if inst in self.day_open else None,
-                         self.day_open.get(inst), inst in live, False)
-            for alias, inst in extra_insts.items()
-        }
         ctx = StrategyContext(
             account_id=acct,
             trading_day=plan.trading_day,
             now_ns=ts,
-            equity=float(self.capital[acct]) if self.cfg.sizing == "initial" else ra.ledger.funds().equity,
+            equity=float(self.capital[acct]),
             registry=self.registry,
             quotes=quotes,
             positions=net,
             state=ra.state,
-            halted_since_ns=ra.state_since_ns if ra.state == AccountState.HALTED else None,
-            extra=extra,
         )
         targets = strat.targets(ctx)
         if not targets:
@@ -663,26 +494,15 @@ class Replay:
         qty = int(order["qty"])
         before = len(self.result.orders)
         accepted, code = self.executors[acct].send(inst, direction, offset, qty, price, purpose=f"scripted:{order.get('label', '')}")
-        coids = [o["client_order_id"] for o in self.result.orders[before:]]
         statuses = []
-        for c in coids:
-            rec = self.core.orders.get(c)
+        for o in self.result.orders[before:]:
+            rec = self.core.orders.get(o["client_order_id"])
             statuses.append(rec.status.value if rec is not None else "NONE")
         self.result.scripted.append({
             "label": order.get("label", ""), "step": order.get("step"), "account_id": acct, "instrument_id": inst,
             "direction": direction.value, "offset": offset.value, "qty": qty, "price": price, "accepted": accepted,
             "code": code, "statuses": statuses, "expect": order.get("expect"),
         })
-
-    def _sample(self, ts: int) -> None:
-        for a in self.accounts:
-            ra = self.core.account(a)
-            v = ra.valuation
-            if v is None:
-                continue
-            pct = v.metrics.daily_pnl_pct_init
-            buf = self.samples.setdefault(a, [])
-            buf.append((ts, pct))
 
     # ============================================================ day loop
     def run(self) -> ArmResult:
@@ -705,12 +525,10 @@ class Replay:
         for i, td in enumerate(days):
             plan = first_plan if i == 0 else self._plan(td, sod)
             if i > 0:
-                roll_ns = self._roll_time(days[i - 1], plan)
+                roll_ns = self._roll_time(plan)
                 if roll_ns > self.clock.now_ns():
                     self.clock.set(roll_ns)
-                t = wall_s()
                 self._run(self.core.roll_day(sod))
-                self.stats.settle_s += wall_s() - t
             sod = self._day(td, plan, sod, days[i + 1] if i + 1 < n else None)
             self.stats.days += 1
             if self.progress is not None and (i % report_every == 0 or i == n - 1):
@@ -722,7 +540,7 @@ class Replay:
         self.result.notes.extend(self.source.notes)
         return self.result
 
-    def _roll_time(self, prev_td: str, plan: DayPlan) -> int:
+    def _roll_time(self, plan: DayPlan) -> int:
         """Just after the previous day's settlement, before the new day's first state."""
         now = self.clock.now_ns()
         first = plan.points[0].ts_ns if plan.points else now + NS_PER_S
@@ -732,26 +550,20 @@ class Replay:
         n = self.cfg.warmup_days
         if n <= 0:
             return
-        for acct, strat in self.strategies.items():
+        for strat in self.strategies.values():
             for pr in strat.products:
                 for bar in self.source.warmup_bars(pr, first_td, n):
                     if bar.roll_factor != 1.0:
                         strat.on_roll(pr, bar.roll_factor)
                     strat.on_bar(pr, bar)
-            if isinstance(strat, CalendarSpread):
-                self.result.notes.append(f"{acct}: the spread history starts with the replay (no warm-up)")
 
     def _plan(self, td: str, sod: SodSnapshot) -> DayPlan:
-        t = wall_s()
         held = {lot.instrument_id for a in sod.accounts for lot in a.lots}
         pre = {k: float(v) for k, v in sod.pre_settle.items()}
-        plan = self.source.plan(td, pre, held, self.extras_req)
-        self.stats.plan_s += wall_s() - t
-        return plan
+        return self.source.plan(td, pre, held)
 
     def _day(self, td: str, plan: DayPlan, sod: SodSnapshot, next_td: str | None) -> SodSnapshot:
         self.td = td
-        self.plan = plan
         self.last_px = {}
         self.day_open = {}
         self.day_hi = {}
@@ -759,8 +571,6 @@ class Replay:
         self.replayed = {}
         self.live_now = set()
         self.day_flags = {}
-        self.samples = {}
-        self.pending_reduce = {}
         for strat in self.strategies.values():
             for pr in strat.products:
                 f = plan.roll_factors.get(pr, 1.0)
@@ -770,26 +580,6 @@ class Replay:
         self.broker.begin_day(td)
         # engine equity right after the roll, before any state (continuity with yesterday's settlement)
         self.sod_equity = {a: self.core.account(a).ledger.funds().equity for a in self.accounts}
-        replayed_insts = {p.instrument_id for p in plan.points}
-        self.open_equity = {}
-        self.open_need = {}
-        for sa in sod.accounts:
-            if sa.account_id in self.sod_equity:
-                need = {lot.instrument_id for lot in sa.lots if lot.qty > 0} & replayed_insts
-                if need:
-                    self.open_need[sa.account_id] = need
-        for a in self.accounts:
-            if a not in self.open_need:
-                self.open_equity[a] = self.sod_equity[a]
-        self.acct_span = self._account_spans(plan, sod)
-        self.placebo_due = {}
-        for a, days in self.placebo.items():
-            frac = days.get(td)
-            span = self.acct_span.get(a)
-            if frac is not None and span is not None:
-                first, last = span
-                self.placebo_due[a] = first + int(round(max(0.0, min(1.0, frac)) * (last - first)))
-        t_rep = wall_s()
         pts = plan.points
         i = 0
         while i < len(pts):
@@ -804,12 +594,8 @@ class Replay:
         self.live_now = set()
         self.broker.end_day()
         self._run(self.core.evaluate_dirty())
-        self.stats.replay_s += wall_s() - t_rep
         # ---------------------------------------------------------------- EOD
-        t_set = wall_s()
-        eod_ns = max(self.clock.now_ns(), last_ts) + 60 * NS_PER_S
-        self.clock.set(eod_ns)
-        engine_equity = {a: self.core.account(a).ledger.funds().equity for a in self.accounts}
+        self.clock.set(max(self.clock.now_ns(), last_ts) + 60 * NS_PER_S)
         ack = self.core.freeze(td)
         digests = {d.account_id: d for d in ack.accounts}
         for a in self.accounts:
@@ -836,112 +622,33 @@ class Replay:
             self.stats.settle_failed_checks += len(failed)
             if len(self.stats.settle_errors) < 20:
                 self.stats.settle_errors.append(f"{td}: {[c.check.value for c in failed]}")
-        self._daily_rows(td, plan, sod, ds, engine_equity, views)
-        self.prev_actions = {}
-        for act in self.result.actions:
-            if act["trading_day"] == td and "settle" not in act:
-                inst = act["instrument_id"]
-                act["settle"] = float(views[inst].price) if inst in views else None
-                act["close"] = self.last_px.get(inst)
-                act["next_open"] = None
-                act["multiplier"] = self.registry.multiplier(inst)
-                self.prev_actions.setdefault(inst, []).append(act)
-        self.stats.settle_s += wall_s() - t_set
+        self._daily_rows(td, plan, sod, ds)
         # ---------------------------------------------------------- strategies
         for strat in self.strategies.values():
             for pr in strat.products:
                 bar = plan.daily_bars.get(pr)
                 if bar is not None:
                     strat.on_bar(pr, bar)
-            if isinstance(strat, CalendarSpread):
-                near = plan.mains.get(strat.p.product)
-                far = plan.extras.get(strat.account_id, {}).get("far")
-                if near and far and near in views and far in views:
-                    strat.on_spread(float(views[near].price), float(views[far].price))
         self.engine_ep.fact_log.clear()
         self.bus.endpoint(GATEWAY).fact_log.clear()
         return ds.next_sod
 
-    def _account_spans(self, plan: DayPlan, sod: SodSnapshot) -> dict[str, tuple[int, int]]:
-        """First and last market state of the contracts an account trades or holds today."""
-        first: dict[str, int] = {}
-        last: dict[str, int] = {}
-        for p in plan.points:
-            first.setdefault(p.instrument_id, p.ts_ns)
-            last[p.instrument_id] = p.ts_ns
-        held: dict[str, set[str]] = {}
-        for sa in sod.accounts:
-            held[sa.account_id] = {lot.instrument_id for lot in sa.lots if lot.qty > 0}
-        out: dict[str, tuple[int, int]] = {}
-        for a in self.accounts:
-            strat = self.strategies.get(a)
-            insts = set(held.get(a, set()))
-            if strat is not None:
-                insts |= {plan.mains[p] for p in strat.products if p in plan.mains}
-            insts |= set(plan.extras.get(a, {}).values())
-            ts0 = [first[i] for i in insts if i in first]
-            ts1 = [last[i] for i in insts if i in last]
-            if ts0 and ts1:
-                out[a] = (min(ts0), max(ts1))
-        return out
-
     # ============================================================ daily rows
-    def _daily_rows(self, td: str, plan: DayPlan, sod: SodSnapshot, ds: Any, engine_equity: Mapping[str, float],
-                    views: Mapping[str, SettlementPriceView]) -> None:
-        est = plan.estimated
-        first = plan.first_ts()
-        sod_lots: dict[str, dict[str, int]] = {}
+    def _daily_rows(self, td: str, plan: DayPlan, sod: SodSnapshot, ds: Any) -> None:
+        sod_net: dict[str, dict[str, int]] = {}
         for sa in sod.accounts:
-            d = sod_lots.setdefault(sa.account_id, {})
+            d = sod_net.setdefault(sa.account_id, {})
             for lot in sa.lots:
-                sign = 1 if lot.direction == PosDirection.LONG else -1
-                d[lot.instrument_id] = d.get(lot.instrument_id, 0) + sign * lot.qty
-        ladder = self.cfg.rules.ladder
+                p = self.registry.product(lot.instrument_id)
+                d[p] = d.get(p, 0) + (lot.qty if lot.direction == PosDirection.LONG else -lot.qty)
         for a in self.accounts:
             res = ds.accounts[a]
             cap = float(self.capital[a])
             flags = self.day_flags.get(a, {})
-            samples = self.samples.get(a, [])
-            pcts = [p for _t, p in samples]
             strat = self.strategies.get(a)
-            prods = set(strat.products) if strat else set()
-            traded = {t.instrument_id for t in self.broker.trades_of(a)}
-            touched = set(sod_lots.get(a, {})) | traded
-            roll_day = any(p in plan.rolls for p in prods | {self.registry.product(i) for i in touched})
-            est_day = bool(touched & est)
-            # bounds of the static book after the open (see paths.pnl_bounds)
-            opt = pess = base = 0.0
-            common = True
-            if self.cfg.analysis.bounding:
-                legs: list[Leg] = []
-                open_trades: dict[str, int] = {}
-                for t in self.broker.trades_of(a):
-                    if first.get(t.instrument_id) == t.trade_ts_ns:
-                        open_trades[t.instrument_id] = open_trades.get(t.instrument_id, 0) + (
-                            t.qty if t.direction == Direction.BUY else -t.qty)
-                first_states: list[int] = []
-                for inst in sorted(touched):
-                    pts = self.replayed.get(inst)
-                    if not pts:
-                        continue
-                    n_sod = sod_lots.get(a, {}).get(inst, 0)
-                    mult = float(self.registry.multiplier(inst))
-                    o = pts[0].price
-                    ps = float(sod.pre_settle[inst]) if inst in sod.pre_settle else o
-                    base += n_sod * mult * (o - ps)
-                    n_after = n_sod + open_trades.get(inst, 0)
-                    if n_sod or n_after:
-                        first_states.append(pts[0].ts_ns)
-                    legs.append(Leg(n_after, mult, o, max(x.price for x in pts), min(x.price for x in pts), pts[-1].price,
-                                    net_sod=n_sod, pre=ps))
-                # contracts whose first states are more than a minute apart (a night-session contract and a day-only
-                # index future) have no joint opening state
-                common = not first_states or max(first_states) - min(first_states) <= 60 * NS_PER_S
-                opt, pess = pnl_bounds(base, legs, common_open=common)
-            span = self.acct_span.get(a)
-            eq_sod = self.sod_equity.get(a, 0.0)
-            eq_open = self.open_equity.get(a, eq_sod)
-            eq_close = engine_equity.get(a, 0.0)
+            touched = {lot.instrument_id for sa in sod.accounts if sa.account_id == a for lot in sa.lots}
+            touched |= {t.instrument_id for t in self.broker.trades_of(a)}
+            products = set(strat.products if strat else ()) | {self.registry.product(i) for i in touched}
             row: dict[str, Any] = {
                 "arm": self.arm.name,
                 "tier": self.arm.tier,
@@ -957,62 +664,26 @@ class Replay:
                 "fee": float(res.fee),
                 "margin": float(res.margin),
                 "risk_degree": float(res.risk_degree),
-                "perf_equity": float(res.perf_equity),
-                "hwm_equity": float(res.hwm_equity),
                 "nav": float(res.nav),
-                "dd": float(res.max_drawdown),
                 "ret": float(res.day_pnl) / cap,
-                "engine_equity_close": eq_close,
-                "engine_equity_sod": eq_sod,
-                "engine_equity_open": eq_open,
-                # engine P&L of the day at the last market state (close) and of the SOD book at the open, / capital
-                "close_ret": (eq_close - eq_sod) / cap,
-                "open_ret": (eq_open - eq_sod) / cap,
-                "first_ts": span[0] if span else None,
-                "last_ts": span[1] if span else None,
-                "intraday_min_pct": min(pcts) if pcts else 0.0,
-                "intraday_max_pct": max(pcts) if pcts else 0.0,
-                "open_pct": pcts[0] if pcts else 0.0,  # at the day's first market state of any of its contracts
-                "close_pct": pcts[-1] if pcts else 0.0,
+                "engine_equity_sod": self.sod_equity.get(a),
+                "sod_net": json.dumps(dict(sorted(sod_net.get(a, {}).items())), sort_keys=True),
                 "halted": bool(flags.get("halted")),
                 "halt_latched": bool(flags.get("halt_latched")),
                 "halt_revoked": int(flags.get("halt_revoked", 0)),
                 "latch_ts": flags.get("latch_ts"),
-                "placebo_ts": flags.get("placebo_ts"),
                 "orders": int(flags.get("orders", 0)),
                 "rejects": int(flags.get("rejects", 0)),
                 "blocked_opens": int(flags.get("blocked_opens", 0)),
                 "blocked_adds": int(flags.get("blocked_adds", 0)),
                 "trades": len(self.broker.trades_of(a)),
-                "active": bool(sod_lots.get(a)) or bool(traded),
-                "roll_day": roll_day,
-                "est_settle": est_day,
-                "sod_net": json.dumps({self.registry.product(i): n for i, n in sorted(sod_lots.get(a, {}).items())}, sort_keys=True),
-                "common_open": common,
-                "bound_base": base,
-                "bound_opt": opt,
-                "bound_pess": pess,
+                "roll_day": any(p in plan.rolls for p in products),  # a main-contract roll of a product it trades
+                "est_settle": bool(touched & plan.estimated),  # settled on an estimated price (DCE, flat exit)
             }
-            for lv in ("warn", "restrict", "halt", "derisk"):
+            for lv in LEVELS:
                 row[f"trig_{lv}"] = f"trig_{lv}" in flags
-                row[f"trig_{lv}_ts"] = flags.get(f"trig_{lv}")
                 row[f"trig_{lv}_value"] = flags.get(f"trig_{lv}_value")
-                row[f"trig_{lv}_open"] = bool(flags.get(f"trig_{lv}_open", False))
-                lv_mult = ladder.get(lv)
-                if lv_mult is not None and self.cfg.analysis.bounding:
-                    row[f"class_{lv}"] = classify(opt, pess, -self.threshold * lv_mult * cap)
             self.result.daily.append(row)
-            keep = td in self.record_days or (
-                row["trig_halt"] and self.intraday_budget > 0
-            ) or (row.get("class_halt") == CERTAIN and self.intraday_budget > 0 and row["trig_halt"])
-            if keep and samples:
-                if td not in self.record_days:
-                    self.intraday_budget -= 1
-                self.result.intraday[f"{td}|{a}"] = [(t, round(p, 6)) for t, p in samples]
-
-
-def book_net(book: Mapping[str, PosInfo]) -> dict[str, int]:
-    return {i: p.net for i, p in book.items()}
 
 
 __all__ = ["ArmResult", "ArmStats", "Replay", "action_day", "iso_bj"]

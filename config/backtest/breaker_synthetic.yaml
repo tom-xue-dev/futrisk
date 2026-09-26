@@ -11,6 +11,7 @@
 #   s7 back to -3.5%: the latch holds (only risk.reset or the day roll releases it)
 # The second scenario is a single bad tick: rb alone prints -9% for 300 ms; the halt goes PENDING (HALTED,
 # not latched) and is revoked by the next state before its confirmation - it must never latch.
+# Every scenario runs in both arms; the checks apply to the block_open arm, and the no_rules arm must raise nothing.
 # Run: futrisk backtest run breaker_synthetic
 name: breaker_synthetic
 description: >-
@@ -18,13 +19,9 @@ description: >-
   熔断后开仓被拒、平仓成交；以及一笔坏 tick 只能让熔断进入待确认、不能锁存。
 kind: scenario
 layer: D
-products: [rb, hc, i, j]
-accounts:
-  ACC3: {strategy: counter_trend_add, products: [rb, hc, i]}
 arms:
   - {name: no_rules, tier: none}
   - {name: block_open, tier: block_open}
-  - {name: flatten, tier: flatten}
 rules:
   threshold: 0.03
 scenarios:

@@ -320,21 +320,24 @@ function summaryTable(summary: Record<string, unknown> | null | undefined): { gr
   return { groups, rows: keys.map((k) => ({ key: k, vals: groups.map((g) => (summary[g] as Record<string, unknown>)[k]) })) }
 }
 
+/** backtest_runs.summary of an ``arms`` run: one object per arm, the whole book (backtest/analysis.py). */
 const METRIC_LABELS: Record<string, string> = {
-  total_return: '区间收益',
-  max_drawdown: '最大回撤',
-  calmar: 'Calmar',
-  triggers: '触发次数',
-  avoided_loss: '避免的损失',
-  false_positive_rate: '假阳性率',
+  total_ret: '区间收益',
+  max_dd: '最大回撤',
+  worst_day: '最差单日',
+  latched_days: '熔断锁存天数',
+  blocked_opens: '被拒开仓',
+  rule_days: '规则生效账户日',
+  effect_sum: '当日效果合计',
+  next_effect_sum: '次日效果合计',
 }
-const GROUP_LABELS: Record<string, string> = { rules: '有风控', no_rules: '无风控' }
+const PCT_METRICS = new Set(['total_ret', 'max_dd', 'worst_day', 'effect_sum', 'next_effect_sum'])
+const GROUP_LABELS: Record<string, string> = { block_open: '日亏规则', no_rules: '无风控' }
 
 function metricText(k: string, v: unknown): string {
   const n = toNum(v)
   if (n === null) return v === undefined ? '—' : String(v)
-  if (k === 'total_return' || k === 'max_drawdown' || k === 'false_positive_rate') return fmtPct(n, 2)
-  if (k === 'avoided_loss') return fmtMoney(n, 0)
+  if (PCT_METRICS.has(k)) return fmtPct(n, 2)
   return fmtNum(n, Number.isInteger(n) ? 0 : 2)
 }
 

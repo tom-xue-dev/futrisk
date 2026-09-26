@@ -21,7 +21,7 @@ def breaker(tmp_path_factory: pytest.TempPathFactory) -> Any:
 
 def _arm(out: Any, scenario: int, arm: str) -> Any:
     for r in out.results:
-        if r.stats.get("group") == f"sc:{scenario}" and r.arm == arm:
+        if r.stats.get("scenario") == scenario and r.arm == arm:
             return r
     raise KeyError((scenario, arm))
 
@@ -76,20 +76,9 @@ def test_no_rules_arm_produces_no_risk_events(breaker: Any) -> None:
         assert all(s["to_state"] in ("NORMAL", "RESTRICTED") and s["step"] is None for s in r.states)  # start-up only
 
 
-def test_flatten_tier_closes_every_position_when_the_breaker_latches(breaker: Any) -> None:
-    r = _arm(breaker, 0, "flatten")
-    acts = sorted((a["instrument_id"], a["offset"], a["qty"], a["accepted"]) for a in r.actions)
-    assert acts == [("hc2701", "CLOSE_TODAY", 51, 51), ("i2701", "CLOSE", 27, 27), ("rb2701", "CLOSE_TODAY", 125, 125)]
-    tier_orders = [o for o in r.orders if o["purpose"] == "tier:flatten"]
-    assert {o["step"] for o in tier_orders} == {"s5"} and all(o["ok"] for o in tier_orders)
-    # after the flatten the scripted close has nothing left to close
-    assert {o["label"]: o["code"] for o in r.scripted}["close_after_halt"] == codes.REJECT_CLOSE_TODAY_EXCEEDS
-
-
 def test_outputs_written(breaker: Any) -> None:
     out: Path = breaker.out_dir
-    for name in ("report.html", "metrics.csv", "events.parquet", "states.parquet", "daily.parquet", "orders.parquet",
-                 "manifest.json", "summary.json"):
+    for name in ("report.html", "daily.csv", "events.csv", "orders.csv", "manifest.json", "summary.json"):
         assert (out / name).exists(), name
     html = (out / "report.html").read_text(encoding="utf-8")
-    assert "data:image/png;base64," in html and "<link" not in html and "http://" not in html.replace("http://www.w3", "")
+    assert "16/16" in html and "<link" not in html and "<script" not in html and "http://" not in html

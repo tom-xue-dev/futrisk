@@ -11,7 +11,6 @@ from btsupport import base, write_hist
 
 from futrisk.backtest.config import AccountRun, ArmSpec, BacktestConfig
 from futrisk.backtest.data import Bar, HistData
-from futrisk.backtest.metrics import roll_gap_analysis
 from futrisk.backtest.paths import TickGrid
 from futrisk.backtest.replay import Replay
 from futrisk.backtest.sources import DailySource, lock_prices
@@ -70,7 +69,7 @@ def i_files(root: Path) -> None:
 
 def run(root: Path, products: list[str]) -> tuple[Replay, Any, DailySource]:
     cfg = BacktestConfig(name="t", data={"dir": str(root)}, products=products,
-                         accounts={"ACC2": AccountRun(strategy="multi_trend", capital=5_000_000)},
+                         accounts={"ACC2": AccountRun(capital=5_000_000)},
                          arms=[ArmSpec(name="no_rules", tier="none")], workers=1)
     hist = HistData(cfg.data_dir(), products, base().products)
     src = DailySource(hist, cfg, base().calendar)
@@ -93,7 +92,7 @@ def test_loader_reads_the_documented_schema(tmp_path: Path) -> None:
 def test_roll_closes_the_old_main_and_opens_the_new_one_at_the_open(tmp_path: Path) -> None:
     rb_files(tmp_path)
     rep, res, src = run(tmp_path, ["rb"])
-    plan = src.plan(D2, {"rb2610": 3005.0}, {"rb2610"}, {})
+    plan = src.plan(D2, {"rb2610": 3005.0}, {"rb2610"})
     assert plan.rolls == {"rb": ("rb2610", "rb2701")} and set(plan.bars) == {"rb2610", "rb2701"}
     trades = [(o["trading_day"], o["instrument_id"], o["direction"], o["offset"], o["qty"], o["price"]) for o in res.orders]
     assert trades == [
@@ -110,9 +109,6 @@ def test_roll_closes_the_old_main_and_opens_the_new_one_at_the_open(tmp_path: Pa
     # a naive continuous series would have booked the +3.0% roll gap: (3108 - 3005) * 100
     naive = (3108 - 3005) * 100
     assert naive - rows[D2]["day_pnl"] > 9000
-    rg = roll_gap_analysis(res, src.hist.series, {"rb": 10}, 0.03)
-    assert rg["rolls"] == {"rb": 1} and rg["roll_account_days"] == 1
-    assert rg["gap_mean_abs_pct"]["rb"] == pytest.approx(abs(3095 / 3005 - 1) * 100)
 
 
 def test_dce_old_main_without_data_exits_flat_at_its_previous_settle(tmp_path: Path) -> None:
@@ -120,7 +116,7 @@ def test_dce_old_main_without_data_exits_flat_at_its_previous_settle(tmp_path: P
     rep, res, src = run(tmp_path, ["i"])
     d2 = [o for o in res.orders if o["trading_day"] == D2]
     assert [(o["instrument_id"], o["direction"], o["price"]) for o in d2] == [("i2701", "SELL", 702.0), ("i2705", "BUY", 690.0)]
-    plan = src.plan(D2, {"i2701": 702.0}, {"i2701"}, {})
+    plan = src.plan(D2, {"i2701": 702.0}, {"i2701"})
     assert plan.bars["i2701"].settle_source == "flat" and plan.bars["i2701"].estimated
     assert plan.bars["i2705"].pre_settle_source == "open" and plan.bars["i2705"].estimated
     rows = {r["trading_day"]: r for r in res.daily}

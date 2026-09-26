@@ -1,46 +1,33 @@
-"""Intraday price paths and their uncertainty (01 §8.16 日内路径; plan §7.1).
+"""The intraday price path of a daily bar (01 §8.16 日内路径).
 
 Layer A only has daily bars, so the intraday path is synthesized:
 
 - **order rule** (``open_near_extreme``): an open nearer the high goes
   O→H→L→C, an open nearer the low goes O→L→H→C; on a tie an up day
-  (C ≥ O) visits the low first. ``high_first`` / ``low_first`` force one order
-  (used for sensitivity runs);
+  (C ≥ O) visits the low first. ``high_first`` / ``low_first`` force one order;
 - **states**: every leg (O→E1, E1→E2, E2→C) is split into linearly
   interpolated states on the tick grid (at least ``points_per_leg``, more when a
   leg moves more than ``max_step`` × open per state, at most
-  ``max_points_per_leg``), so a strategy that trades on the way (the
-  counter-trend ladder) and the breaker see a gradual move rather than one jump.
-  Interpolated states never leave [low, high]. The state count of a contract
-  depends on its own bar only, so its path does not change with the other
-  contracts replayed that day;
+  ``max_points_per_leg``), so the strategy and the breaker see a gradual move
+  rather than one jump. Interpolated states never leave [low, high]. The state
+  count of a contract depends on its own bar only, so its path does not change
+  with the other contracts replayed that day;
 - **time**: the states are spread evenly over the contract's continuous
   trading time of that trading day (session templates of ``products.yaml``,
   night session first): the open, the extremes and the close sit at 0, 1/3, 2/3
   and 1 of the trading time, so contracts with the same sessions reach their
-  extremes at the same time (a synchronised, pessimistic model; the stochastic
-  ensemble of :mod:`futrisk.backtest.pathmodel` relaxes it). The open is 1 s
+  extremes at the same time (a synchronised, pessimistic model). The open is 1 s
   after the first session opens, the close 1 s before the last one ends.
 
-Because a daily bar admits many paths, the backtest also classifies every
-account-day (:func:`pnl_bounds`, :func:`classify`) for the book held after the
-open: the day's minimum P&L lies between the **pessimistic** bound (every
-contract at its adverse extreme at the same time) and the **optimistic** bound
-(the highest minimum a path consistent with the bars can have). A rule level is
-*certain* when even the optimistic bound breaches it, *impossible* when not
-even the pessimistic bound does, and *uncertain* otherwise. The classes concern
-whether the static book **reaches** a line; the size of a rule's effect still
-depends on the path after it.
-
-:func:`order_hit_rate` measures the order rule against minute bars (layer B):
-which extreme came first in the minute data vs which one the rule predicts.
+A daily bar admits many paths; the results of layer A are therefore conditional
+on this path model (10 文档).
 """
 
 from __future__ import annotations
 
 import bisect
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -206,14 +193,6 @@ def bar_path(
     return out
 
 
-def bar_prices(
-    o: float, h: float, lo: float, c: float, grid: TickGrid, points_per_leg: int, rule: str = "open_near_extreme"
-) -> list[tuple[float, str]]:
-    """Prices and kinds of the synthesized states: O, then ``points_per_leg`` per leg (the leg end included)."""
-    k = max(1, points_per_leg)
-    return [(p, kind) for p, kind, _f in bar_path(o, h, lo, c, grid, (k, k, k), rule)]
-
-
 def synthesize(
     instrument_id: str,
     timeline: Timeline,
@@ -254,211 +233,19 @@ def synthesize(
     return out
 
 
-def minute_bar_points(
-    instrument_id: str,
-    timeline: Timeline,
-    bars: Iterable[tuple[int, float, float, float, float]],
-    *,
-    period_min: int,
-    multiplier: int,
-    rule: str = "open_near_extreme",
-) -> list[Point]:
-    """Layer B: each minute bar ``(end_ns, o, h, l, c)`` becomes O, E1, E2, C inside its trading time.
-
-    The bar covers the ``period_min`` trading minutes before its end label
-    (Sina bars span session breaks); the four states sit at 1 s, 1/3, 2/3 and
-    ``period`` − 1 s of that span; the high/low order follows ``rule``. Sina's
-    minute volumes are unreliable (SOURCES.md), so volume is a state counter
-    and layer B settles on the official daily settlement price.
-    """
-    out: list[Point] = []
-    cum_v = 0
-    cum_t = 0.0
-    last_ts = -1
-    period = period_min * NS_PER_MIN
-    for end_ns, o, h, lo, c in bars:
-        off_end = timeline.offset_of(end_ns)
-        if off_end <= 0:
-            continue
-        off_start = max(0, off_end - period)
-        span = off_end - off_start
-        e1, e2 = extreme_order(o, h, lo, c, rule)
-        val = {KIND_HIGH: h, KIND_LOW: lo}
-        seq = [(o, KIND_OPEN), (val[e1], e1), (val[e2], e2), (c, KIND_CLOSE)]
-        offs = [off_start + min(NS_PER_S, span // 4), off_start + span // 3, off_start + 2 * span // 3,
-                off_end - min(NS_PER_S, span // 4)]
-        for (p, kind), off in zip(seq, offs, strict=True):
-            ts = timeline.at(off)
-            if ts <= last_ts:
-                ts = last_ts + 1
-            last_ts = ts
-            cum_v += 1
-            cum_t += p * multiplier
-            out.append(Point(ts, instrument_id, p, kind, cum_v, cum_t))
-    return out
-
-
-# ----------------------------------------------------------------- bounding
-@dataclass(frozen=True, slots=True)
-class Leg:
-    """One contract of a book for the bound computation: net lots (signed) and the day's prices.
-
-    ``net`` is the static book after the open; ``net_sod`` / ``pre`` (the SOD lots and the previous settle, the
-    SOD mark) are only needed for books whose contracts do not open at the same time (``common_open=False``).
-    """
-
-    net: int
-    multiplier: float
-    open: float
-    high: float
-    low: float
-    close: float
-    net_sod: int | None = None
-    pre: float | None = None
-
-
-def pnl_bounds(base: float, legs: Iterable[Leg], *, common_open: bool = True) -> tuple[float, float]:
-    """``(optimistic_min, pessimistic_min)`` of the intraday P&L of a static book.
-
-    ``pessimistic_min`` is a lower bound of the day's minimum P&L over every path consistent with the bars;
-    ``optimistic_min`` an upper bound of it (every path goes at least as low), so a loss line below the
-    optimistic bound is reached on every path (*certain*) and one above the pessimistic bound on none.
-
-    - ``common_open`` (every contract opens in the same first market state): ``base`` is the P&L of that
-      opening state and P&L(P) = base + Σ net·mult·(P − O). Forced states: the joint open, the joint close and
-      each contract's adverse extreme (the others at best at their favourable extremes);
-    - otherwise (e.g. a night-session contract and a day-only index future): contract i contributes 0 before its
-      own open (marked at its previous settle) and c_i(P) = net_sod·mult·(O − pre) + net·mult·(P − O) after it.
-      There is no joint opening state: the forced states are the joint close (end of the day), each contract's
-      adverse extreme and each contract's open, the other contracts at the best of {0, c_j(L), c_j(H)}.
-      ``base`` is ignored (every contract's opening gap is inside its c_i).
-    """
-    items = [g for g in legs if g.net != 0 or (g.net_sod or 0) != 0]
-    if common_open:
-        adv: list[float] = []
-        fav: list[float] = []
-        close_delta = 0.0
-        for g in items:
-            k = g.net * g.multiplier
-            lo_d = k * (g.low - g.open)
-            hi_d = k * (g.high - g.open)
-            adv.append(min(lo_d, hi_d))
-            fav.append(max(lo_d, hi_d))
-            close_delta += k * (g.close - g.open)
-        pess = base + sum(adv)
-        cands = [base, base + close_delta]
-        total_fav = sum(fav)
-        for a, f in zip(adv, fav, strict=True):
-            cands.append(base + a + (total_fav - f))
-        return min(cands), pess
-    gap: list[float] = []
-    adv_m: list[float] = []
-    fav_m: list[float] = []
-    final = 0.0
-    for g in items:
-        n_sod = g.net if g.net_sod is None else g.net_sod
-        pre = g.open if g.pre is None else g.pre
-        k = g.net * g.multiplier
-        g0 = n_sod * g.multiplier * (g.open - pre)
-        c_lo, c_hi = g0 + k * (g.low - g.open), g0 + k * (g.high - g.open)
-        gap.append(g0)
-        adv_m.append(min(c_lo, c_hi))
-        fav_m.append(max(0.0, c_lo, c_hi))
-        final += g0 + k * (g.close - g.open)
-    pess = sum(min(0.0, a) for a in adv_m)
-    total_fav = sum(fav_m)
-    cands = [final]
-    for g0, a, f in zip(gap, adv_m, fav_m, strict=True):
-        others = total_fav - f
-        cands.append(a + others)
-        cands.append(g0 + others)
-    return min(cands), min(pess, min(cands))
-
-
-CERTAIN = "certain"
-IMPOSSIBLE = "impossible"
-UNCERTAIN = "uncertain"
-
-
-def classify(optimistic_min: float, pessimistic_min: float, threshold: float) -> str:
-    """Trigger class of a loss threshold (``threshold`` < 0, same unit as the bounds)."""
-    if optimistic_min <= threshold:
-        return CERTAIN
-    if pessimistic_min > threshold:
-        return IMPOSSIBLE
-    return UNCERTAIN
-
-
-# ----------------------------------------------------------------- hit rate
-@dataclass
-class HitStats:
-    days: int = 0
-    determined: int = 0
-    hits: int = 0
-    ties: int = 0  # open exactly half-way (tie-break rule used)
-    same_bar: int = 0  # high and low in the same minute bar: order unknown
-
-    @property
-    def hit_rate(self) -> float | None:
-        return self.hits / self.determined if self.determined else None
-
-    def add(self, other: HitStats) -> None:
-        self.days += other.days
-        self.determined += other.determined
-        self.hits += other.hits
-        self.ties += other.ties
-        self.same_bar += other.same_bar
-
-
-def order_hit_rate(days: Iterable[Sequence[tuple[float, float, float, float]]], rule: str = "open_near_extreme") -> HitStats:
-    """Hit rate of the order rule on intraday bar sequences (one ``[(o, h, l, c), ...]`` per day)."""
-    st = HitStats()
-    for bars in days:
-        if not bars:
-            continue
-        st.days += 1
-        o = bars[0][0]
-        c = bars[-1][3]
-        h = max(b[1] for b in bars)
-        lo = min(b[2] for b in bars)
-        ih = next(i for i, b in enumerate(bars) if b[1] == h)
-        il = next(i for i, b in enumerate(bars) if b[2] == lo)
-        if ih == il:
-            st.same_bar += 1
-            continue
-        actual = KIND_HIGH if ih < il else KIND_LOW
-        if h - o == o - lo:
-            st.ties += 1
-        predicted = extreme_order(o, h, lo, c, rule)[0]
-        st.determined += 1
-        if predicted == actual:
-            st.hits += 1
-    return st
-
-
 __all__ = [
-    "CERTAIN",
-    "IMPOSSIBLE",
+    "ANCHOR_FRACTIONS",
     "KIND_CLOSE",
     "KIND_HIGH",
     "KIND_INTERP",
     "KIND_LOW",
     "KIND_OPEN",
-    "UNCERTAIN",
-    "HitStats",
-    "Leg",
     "Point",
     "TickGrid",
     "Timeline",
-    "ANCHOR_FRACTIONS",
     "anchors_of",
     "bar_path",
-    "bar_prices",
-    "classify",
-    "leg_counts",
     "extreme_order",
-    "minute_bar_points",
-    "order_hit_rate",
-    "pnl_bounds",
+    "leg_counts",
     "synthesize",
 ]

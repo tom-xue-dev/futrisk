@@ -20,7 +20,6 @@ into marketable limit orders at the current price point:
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -217,23 +216,6 @@ class Executor:
             return
         self.send(inst, direction, Offset.OPEN, left, price, purpose=purpose)
 
-    def reduce(
-        self,
-        steps: list[tuple[str, Direction, Offset, int]],
-        prices: Mapping[str, float],
-        live: set[str],
-        *,
-        purpose: str,
-    ) -> list[tuple[str, Direction, Offset, int, int, str | None]]:
-        """Closing orders of a tier action (halve / flatten); returns (inst, dir, offset, qty, accepted, code)."""
-        out: list[tuple[str, Direction, Offset, int, int, str | None]] = []
-        for inst, direction, offset, qty in steps:
-            if inst not in live or inst not in prices or qty <= 0:
-                continue
-            done, code = self.send(inst, direction, offset, qty, prices[inst], purpose=purpose, source=OrderSource.LIQUIDATION)
-            out.append((inst, direction, offset, qty, done, code))
-        return out
-
 
 def _detail(reply: Reply) -> dict[str, Any] | None:
     try:
@@ -259,23 +241,4 @@ def pos_info(positions: Any, account_id: str, instrument_id: str) -> PosInfo:
     return PosInfo(**d)
 
 
-def book_from_positions(positions: Any, account_id: str) -> dict[str, PosInfo]:
-    """``{instrument: PosInfo}`` from an engine ``PositionBook`` (closable quantities net of working closes)."""
-    acc: dict[str, dict[str, int]] = {}
-    for pos in positions.positions(account_id):
-        if pos.qty <= 0:
-            continue
-        c = pos.closable()
-        d = acc.setdefault(pos.instrument_id, {})
-        if pos.direction == PosDirection.LONG:
-            d.update(long_qty=pos.qty, long_td=c.today, long_yd=c.yd)
-        else:
-            d.update(short_qty=pos.qty, short_td=c.today, short_yd=c.yd)
-    return {k: PosInfo(**v) for k, v in acc.items()}
-
-
-def ceil_frac(qty: int, frac: float) -> int:
-    return min(qty, max(1, math.ceil(qty * frac - 1e-9))) if qty > 0 and frac > 0 else 0
-
-
-__all__ = ["ExecStats", "Executor", "PosInfo", "book_from_positions", "ceil_frac", "pos_info"]
+__all__ = ["ExecStats", "Executor", "PosInfo", "pos_info"]
