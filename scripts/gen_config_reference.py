@@ -210,7 +210,7 @@ ACCOUNTS_DESC = {
     "accounts.{account_id}.shard": "所属 risk-engine 分片；`services.yaml` 中必须有 `risk-engine-{shard}` 实例",
     "accounts.{account_id}.initial_capital": "初始资金（元）。单位净值和验收口径的当日盈亏比率都以它为分母；首日建账时作为上日结存",
     "accounts.{account_id}.strategy": "strategy-sim 为该账户运行的策略名（`channel_breakout`、`multi_trend`、`counter_trend_add`、"
-                                      "`index_directional`、`rb_calendar_spread`）；回测也用它作默认策略",
+                                      "`index_directional`、`rb_calendar_spread`）；回测不用它（回测的策略见 `backtest/*.yaml`）",
     "accounts.{account_id}.products": "策略交易的品种",
     "accounts.{account_id}.initial_positions": "预留字段：首日建账的初始持仓。当前版本不读取（首日建账只写资金，持仓为空）",
     "accounts.{account_id}.initial_positions[].instrument_id": "合约代码",

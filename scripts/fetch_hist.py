@@ -16,7 +16,7 @@ Outputs, all under ``data/hist`` (column definitions and caveats: ``data/hist/SO
 
 * ``daily/{EXCHANGE}/{product}.parquet``  per-contract daily bars with ``is_main`` (layer A);
 * ``daily/{product}.parquet``             continuous main-contract daily series (layer A);
-* ``minute/{product}_{period}m.parquet``  Sina 5/15/60-minute bars of the main contract (layer B);
+* ``minute/{product}_{period}m.parquet``  Sina 5/15/60-minute bars of the main contract (validation evidence; layer B of the full version);
 * ``official/{EXCHANGE}.parquet``         official per-contract data of the last N trading days;
 * ``manifest.json``                       row counts, date ranges, SHA-256, checks, failures.
 

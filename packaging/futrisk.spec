@@ -182,4 +182,4 @@ DATA_HIST = ROOT / "data" / "hist"
 if DATA_HIST.is_dir():
     shutil.copytree(DATA_HIST, Path(coll.name) / "data" / "hist", dirs_exist_ok=True)
 else:
-    print(f"WARNING: {DATA_HIST} not found; backtests of layers A/B need data\\hist next to futrisk.exe")
+    print(f"WARNING: {DATA_HIST} not found; the layer A backtest needs data\\hist next to futrisk.exe")

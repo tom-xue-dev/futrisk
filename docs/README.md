@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-DOC-00 |
-| 版本 | v0.6 |
+| 版本 | v0.7 |
 | 状态 | 实现对齐 |
 | 日期 | 2026-09-26 |
 | 适用范围 | `docs/` 目录下全部文档 |
@@ -31,20 +31,20 @@
 |---|---|---|---|
 | FR-DOC-00 | [README.md](README.md)：文档规范与索引（本文） | — | 实现对齐（v0.6） |
 | FR-SSDD-01 | [01-architecture.md](01-architecture.md)：整体架构说明 | SSDD 系统/子系统设计说明 | 实现对齐（v0.7） |
-| FR-IDD-02 | [02-communication-protocol.md](02-communication-protocol.md)：服务与模块间通信协议 | IDD 接口设计说明 | 实现对齐（v0.6） |
-| FR-DBDD-03 | [03-database-schema.md](03-database-schema.md)：数据库设计与字段说明 | DBDD 数据库设计说明 | 实现对齐（v0.6） |
-| FR-SRS-04 | [04-risk-rules.md](04-risk-rules.md)：风控指标、阈值与理由 | SRS 软件需求规格说明（部分） | 实现对齐（v0.6） |
+| FR-IDD-02 | [02-communication-protocol.md](02-communication-protocol.md)：服务与模块间通信协议 | IDD 接口设计说明 | 实现对齐（v0.7） |
+| FR-DBDD-03 | [03-database-schema.md](03-database-schema.md)：数据库设计与字段说明 | DBDD 数据库设计说明 | 实现对齐（v0.7） |
+| FR-SRS-04 | [04-risk-rules.md](04-risk-rules.md)：风控指标、阈值与理由 | SRS 软件需求规格说明（部分） | 实现对齐（v0.7） |
 | FR-SDD-05 | [05-clearing.md](05-clearing.md)：清算规则、公式出处与手算示例 | SDD 软件设计说明（部分） | 实现对齐（v0.6） |
-| FR-STP-06 | [06-test-plan.md](06-test-plan.md)：测试方案与测试报告 | STP 测试计划 / STR 测试报告 | 实现对齐（v0.1） |
-| FR-SUM-07 | [07-user-guide.md](07-user-guide.md)：使用说明与演示脚本 | SUM 用户手册 | 实现对齐（v0.2） |
-| FR-COM-08 | [08-deployment.md](08-deployment.md)：部署、运维与生产差距 | COM 操作手册 | 实现对齐（v0.2） |
-| FR-DOC-09 | [09-design-decisions.md](09-design-decisions.md)：需求理解与设计决策，逐条回答题目"设计说明"的 6 问 | SRS / SSDD 的补充 | 实现对齐（v0.2） |
-| FR-DOC-10 | [10-backtest-analysis.md](10-backtest-analysis.md)：回测方法、结果与规则有效性分析 | —（分析报告） | 实现对齐（v0.1） |
-| FR-DOC-11 | [11-config-reference.md](11-config-reference.md)：配置参考，由 pydantic 模型自动生成（`scripts/gen_config_reference.py`） | —（参考手册） | 实现对齐（v0.1） |
-| FR-DOC-12 | [12-code-walkthrough.md](12-code-walkthrough.md)：代码导读 | SDD 的补充 | 实现对齐（v0.1） |
+| FR-STP-06 | [06-test-plan.md](06-test-plan.md)：测试方案与测试报告 | STP 测试计划 / STR 测试报告 | 实现对齐（v0.2） |
+| FR-SUM-07 | [07-user-guide.md](07-user-guide.md)：使用说明与演示脚本 | SUM 用户手册 | 实现对齐（v0.3） |
+| FR-COM-08 | [08-deployment.md](08-deployment.md)：部署、运维与生产差距 | COM 操作手册 | 实现对齐（v0.3） |
+| FR-DOC-09 | [09-design-decisions.md](09-design-decisions.md)：需求理解与设计决策，逐条回答题目"设计说明"的 6 问 | SRS / SSDD 的补充 | 实现对齐（v0.3） |
+| FR-DOC-10 | [10-backtest-analysis.md](10-backtest-analysis.md)：回测方法、结果与规则有效性分析 | —（分析报告） | 实现对齐（v0.2） |
+| FR-DOC-11 | [11-config-reference.md](11-config-reference.md)：配置参考，由 pydantic 模型自动生成（`scripts/gen_config_reference.py`） | —（参考手册） | 实现对齐（v0.2） |
+| FR-DOC-12 | [12-code-walkthrough.md](12-code-walkthrough.md)：代码导读 | SDD 的补充 | 实现对齐（v0.2） |
 | FR-DOC-13 | [13-benchmarks.md](13-benchmarks.md)：性能基准结果与分析（完整版 `v0.1-full` 的 `futrisk bench`） | STR 的附件 | 实现对齐（v0.2） |
 
-另有两个资料目录：[`screenshots/`](screenshots/) 是 07 引用的仪表盘截图（真实运行的系统），[`backtests/`](backtests/) 是 10 引用的回测报告副本（代码冻结后的运行，自包含 HTML，可以直接用浏览器打开）。
+另有两个资料目录：[`screenshots/`](screenshots/) 是 07 引用的仪表盘截图（真实运行的系统），[`backtests/`](backtests/) 是 10 引用的回测报告副本（精简版代码上的运行，自包含 HTML，可以直接用浏览器打开）。
 
 项目根目录的 [`README.md`](../README.md) 是快速开始：安装、运行演示、运行测试、构建 exe、截图和演示视频（可选）。本目录下的 README 只负责规定文档规范和提供索引。
 
@@ -134,3 +134,4 @@
 | v0.4 | 2026-09-25 | 需求对齐审查：对照 task.md 逐条核对 01~03，补齐 7 处部分覆盖（单位净值、阈值理由、生产级能力、日志保留、代码规范、行情源独立性、验收用例细节）和追溯表；机械核对仍为 0 个问题 |
 | v0.5 | 2026-09-25 | 设计问题复核：修正演示时间模型、落盘策略与延迟目标、首次启动引导链、回测换日、减仓计划范围、出入金措辞共 6 处；文档同步规则由"同一次提交"改为"按里程碑同步"；表名例外增加 `clock_state` |
 | v0.6 | 2026-09-26 | 实现对齐：01、02、03 按代码逐项核对后升为 v0.6；新增按实现编写的 04、05（v0.6），07、08、09（v0.2），06、10、11、12、13（v0.1），文档清单补齐。`scripts/check_docs.py` 扩展到全部编号文档，并直接导入代码核对表结构与列（含可空性）、消息字段（含是否必填）、枚举取值、错误码和 `FUTRISK_*` 环境变量；机械核对为 0 个问题 |
+| v0.7 | 2026-09-26 | 范围精简（完整版保留为 git 标签 `v0.1-full`）：索引中 01~04、06~13 的版本号随各文档更新；`backtests/` 目录改为精简版的回测报告 |

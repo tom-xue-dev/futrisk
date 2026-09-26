@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-DOC-11 |
-| 版本 | v0.1（按已实现的系统编写） |
+| 版本 | v0.2（精简版，完整版为 git 标签 `v0.1-full`） |
 | 状态 | 实现对齐 |
 | 日期 | 2026-09-25 |
 | 适用范围 | `config/` 下的全部配置文件（运行时位于 `<home>/config/`），以及 `bots.yaml` 和相关环境变量 |
@@ -314,7 +314,7 @@ instruments:
 | `accounts.{account_id}.name` | `str` | 是 | 账户名称，用于界面、报表和结算单 | — | 即时 |
 | `accounts.{account_id}.shard` | `int` | 是 | 所属 risk-engine 分片；`services.yaml` 中必须有 `risk-engine-{shard}` 实例 | — | 拒绝热改 |
 | `accounts.{account_id}.initial_capital` | `decimal` | 是 | 初始资金（元）。单位净值和验收口径的当日盈亏比率都以它为分母；首日建账时作为上日结存 | — | 首日建账时读取 |
-| `accounts.{account_id}.strategy` | `str` \| `null` | 否 | strategy-sim 为该账户运行的策略名（`channel_breakout`、`multi_trend`、`counter_trend_add`、`index_directional`、`rb_calendar_spread`）；回测也用它作默认策略 | `null` | 重启 strategy-sim |
+| `accounts.{account_id}.strategy` | `str` \| `null` | 否 | strategy-sim 为该账户运行的策略名（`channel_breakout`、`multi_trend`、`counter_trend_add`、`index_directional`、`rb_calendar_spread`）；回测不用它（回测的策略见 `backtest/*.yaml`） | `null` | 重启 strategy-sim |
 | `accounts.{account_id}.products` | `list[str]` | 否 | 策略交易的品种 | `[]` | 重启 strategy-sim |
 | `accounts.{account_id}.initial_positions` | 对象列表 | 否 | 预留字段：首日建账的初始持仓。当前版本不读取（首日建账只写资金，持仓为空） | `[]` | 不读取 |
 | `accounts.{account_id}.initial_positions[].instrument_id` | `str` | 是 | 合约代码 | — | 不读取 |
@@ -666,7 +666,7 @@ steps:
 ```powershell
 futrisk backtest run default --set start=20200101 --set rules.threshold=0.025
 futrisk backtest run default --set "arms=[{name: base, tier: none}, {name: prod, tier: block_open}]"
-futrisk backtest sweep sweep --set "sweep.thresholds=[0.02,0.03]"
+futrisk backtest run default --set accounts.ACC3.params.fast=10 --set accounts.ACC3.params.slow=40
 ```
 
 ## 11. calendar/trading_days.csv
@@ -761,3 +761,4 @@ strategy-sim 策略机器人的参数。默认值写在代码里，`src/futrisk/
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | v0.1 | 2026-09-25 | 初版：10 类配置文件和 `bots.yaml` 的字段表由 `scripts/gen_config_reference.py` 从 pydantic 模型生成；补充热加载效果（按代码核对：risk-engine 的品种参数需重启、数据源和端点拒绝热改、外部组件需重启）、动作参数、剧本动作与故障类型、回测配置的读取位置和环境变量 |
+| v0.2 | 2026-09-26 | 范围精简（完整版保留为 git 标签 `v0.1-full`）：回测配置字段按精简后的模型重新生成（删除路径集合、敏感性、统计、压力窗口、扫描等字段）；`accounts.yaml` 的 `strategy` 说明改为回测不用它；§10.2 的示例改为覆盖双均线参数 |

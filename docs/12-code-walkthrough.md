@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-DOC-12 |
-| 版本 | v0.1（按已实现的系统编写） |
+| 版本 | v0.2（精简版，完整版为 git 标签 `v0.1-full`） |
 | 状态 | 实现对齐 |
 | 日期 | 2026-09-25 |
 | 适用范围 | `src/futrisk/` 下的全部代码、`web/` 仪表盘、`tests/` 测试 |
@@ -60,7 +60,7 @@
 | `sim/exchange/` | 虚拟交易所：价格引擎 `engine`、Feed A `feed_a`、Feed B `feed_b`、模拟柜台 `broker`、故障 `faults`、剧本 `scenario`、控制接口 `control`（见 [`sim/README.md`](../src/futrisk/sim/README.md)） |
 | `sim/bots/` | strategy-sim：五个演示账户的策略机器人，基于 `client/` SDK |
 | `client/` | 策略 SDK：`FutriskClient`（按账户找分片发 `order.*`、跟踪委托、订阅行情和回报） |
-| `backtest/` | 回测：配置、历史数据分层、日内路径合成、逐日回放 `replay`（同一个 `EngineCore` 和结算库）、实验方案、统计分析、HTML 报告 |
+| `backtest/` | 回测：配置、日线数据加载（主力换月、DCE 估计）`data`、日内路径合成 `paths`、日线与合成剧本的数据源 `sources`、逐日回放 `replay`（同一个 `EngineCore` 和结算库）、进程内柜台 `broker`、目标仓位执行 `executor`、双均线策略 `strategies`、统计 `analysis`、HTML 报告 `report` |
 | `web_static/dist/` | 构建好的仪表盘，由 api-gateway 托管 |
 
 仓库其他目录：`web/`（Vue 3 仪表盘源码，见 [`web/README.md`](../web/README.md)）、`config/`（默认配置）、`data/hist/`（回测历史数据，来源见 `data/hist/SOURCES.md`）、`deploy/`（docker）、`packaging/`（PyInstaller）、`scripts/`（构建、录制、文档工具）、`tests/`、`docs/`。
@@ -222,3 +222,4 @@ flowchart TB
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | v0.1 | 2026-09-25 | 初版：阅读顺序、包结构、依赖分层（按实际 import 统计）、一笔委托 / 一个 tick / 一次 EOD 的逐步代码位置、其他关键路径、测试布局、编码规范 |
+| v0.2 | 2026-09-26 | 范围精简（完整版保留为 git 标签 `v0.1-full`）：包结构删除 `bench/`；`backtest/` 按精简后的模块改写 |

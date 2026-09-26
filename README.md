@@ -98,8 +98,8 @@ futrisk doctor                  # 环境检查（端口、时区、SQLite 等）
 
 | 类型 | 命令 | 说明 |
 |---|---|---|
-| 单元测试（快速） | `.venv\Scripts\python -m pytest tests/unit -m "not slow"` | 1713 项，数分钟 |
-| 单元测试（全部） | `.venv\Scripts\python -m pytest tests/unit\<目录> --timeout 300`，按目录分别运行 | 另含 29 项多进程、网络回环等慢测试；按目录运行的原因见 06 §8 |
+| 单元测试（快速） | `.venv\Scripts\python -m pytest tests/unit -m "not slow"` | 1674 项，数分钟 |
+| 单元测试（全部） | `.venv\Scripts\python -m pytest tests/unit\<目录> --timeout 300`，按目录分别运行 | 另含 22 项多进程、网络回环等慢测试；按目录运行的原因见 06 §8 |
 | 清算黄金用例 | `.venv\Scripts\python -m pytest tests/golden` | 多日手算案例逐分比对（`tests/golden/CASES.md`） |
 | 性质测试 | `.venv\Scripts\python -m pytest tests/property` | hypothesis：资金恒等式、逐日盯市 = 逐笔对冲等 |
 | 端到端验收 | `.venv\Scripts\python -m pytest -m e2e tests/e2e -v` | 真实启动 8 个进程，自动走完熔断、kill、行情中断、EOD，约 6 分钟 |

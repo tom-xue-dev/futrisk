@@ -4,6 +4,9 @@ Development-time market data for the futrisk backtest (docs/01-architecture.md Â
 layer **A** (daily bars since 2015 with settlement prices) and layer **B** (Sina 60/15/5-minute
 bars). Layers C (recorded ticks) and D (synthetic stress scenarios) are produced elsewhere.
 Nothing here is read by the runtime services; the backtest reads these files read-only.
+The backtest of the slimmed version reads only `daily/` (the minute-bar layer B, and the path model
+calibrated on it, remain in the full version, git tag `v0.1-full`); the minute bars and `official/` are
+kept here as the evidence of the validation notes below.
 
 - Generator: `scripts/fetch_hist.py`, run with the isolated virtualenv `.venv-data`
   (akshare + pyarrow; never the project venv).

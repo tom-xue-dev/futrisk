@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-SUM-07 |
-| 版本 | v0.2（按已实现的系统编写） |
+| 版本 | v0.3（精简版，完整版为 git 标签 `v0.1-full`） |
 | 状态 | 实现对齐 |
 | 日期 | 2026-09-26 |
 | 适用范围 | futrisk 0.1.0：安装与启停、仪表盘、命令行、日常操作（EOD、报表、回测、配置、故障注入、行情录制）和现场演示 |
@@ -273,7 +273,7 @@ Feed A 中断并补数时的行情事件（演示第 6 步）：
 | 数值 | 金额和价格按 API 给出的原样打印，比率显示为百分比 |
 | API key | `FUTRISK_API_KEY` 或 bootstrap key 文件（§2.5） |
 
-命令分组：运维（§4.2）、持仓与账户（§4.3）、委托（§4.4）、风控（§4.5）、演示控制（§4.6）、结算与报表（§4.7）、回测与性能基准（§4.8）、行情数据（§4.9）、配置（§4.10）、单个服务（§4.11）；只有 REST 入口的操作见 §4.12。
+命令分组：运维（§4.2）、持仓与账户（§4.3）、委托（§4.4）、风控（§4.5）、演示控制（§4.6）、结算与报表（§4.7）、回测（§4.8）、行情数据（§4.9）、配置（§4.10）、单个服务（§4.11）；只有 REST 入口的操作见 §4.12。
 
 ### 4.2 运维
 
@@ -350,15 +350,13 @@ SHFE 的平仓必须区分 `close-today` 和 `close-yesterday`；DCE、CFFEX 用
 | `report daily` | 风控日报的路径、URL 和哈希 | `--td`（默认最新）、`--open` 用浏览器打开 | `futrisk report daily --open` |
 | `report statement` | 打印一个账户的文本结算单 | `账户`、`--td`（默认最近结算日） | `futrisk report statement ACC3` |
 
-### 4.8 回测与性能基准
+### 4.8 回测
 
 | 命令 | 作用 | 主要选项 | 示例 |
 |---|---|---|---|
-| `backtest run` | 运行回测配置，在输出目录中写出报告 `<输出目录>\report.html` 以及 `metrics.csv`、`events.parquet`、`manifest.json` 等 | `配置名或 YAML 路径`、`--set 键=值`（可重复）、`--out`、`--workers` | `futrisk backtest run breaker_synthetic` |
-| `backtest sweep` | 熔断阈值 × 动作档位的参数扫描 | `配置`（默认 `sweep`）、`--set`、`--out`、`--workers` | `futrisk backtest sweep --set "sweep.thresholds=[0.02,0.03]"` |
+| `backtest run` | 运行回测配置，在输出目录中写出报告 `<输出目录>\report.html` 以及 `daily.csv`、`events.csv`、`orders.csv`、`summary.json`、`manifest.json`；合成剧本的检查不通过时退出码为 2 | `配置名或 YAML 路径`、`--set 键=值`（可重复）、`--out`、`--workers` | `futrisk backtest run breaker_synthetic` |
 | `backtest list` | 包内回测配置和 `<home>\backtests` 下最近的运行 | `--limit` | `futrisk backtest list` |
 | `backtest show` | 一次运行的清单（哈希、种子、耗时）和主要数字 | `运行目录或名字` | `futrisk backtest show breaker_synthetic-20260925T222421` |
-| `backtest bench` | 一个方案的回放吞吐（tick/s） | `--start`、`--days`、`--tier`、`--profile`、`--static` | `futrisk backtest bench --days 60 --profile` |
 
 回测结果写在 `<home>\backtests\<名字>-<时间戳>\`，方法和结论见 10 文档；性能基准的结果见 13 文档（基准工具只在完整版 `v0.1-full` 中）。
 
@@ -517,11 +515,7 @@ futrisk settle days                      # 最近各交易日的阶段
 | 配置（`config/backtest/`） | 内容 | 耗时量级 |
 |---|---|---|
 | `breaker_synthetic` | D 层合成剧本：精确断言告警 → 限制 → 熔断（先待确认、再锁存）、熔断后开仓被拒平仓成交、单个坏点不会锁存 | 几秒 |
-| `default` | A 层日线 2015 年至今的配对实验：各动作档位对比基线，20 条随机日内路径，另含路径敏感性和 B 层对照（10 §4） | 约 2 小时（15 个工作进程） |
-| `stress` | 压力窗口（2015-07 股灾、2016-11-14 黑色暴跌等），每个窗口单独运行 | 约 5 分钟 |
-| `sweep` | 熔断阈值 × 动作档位扫描，样本内 / 样本外（10 §4.8） | 约 1 小时（15 个工作进程） |
-| `minute` | B 层新浪分钟线 | 不到 1 分钟 |
-| `ticks` | C 层自录 tick（需要先录制，§5.7） | 取决于录制天数 |
+| `default` | A 层日线 2015 年至今的配对实验：同样的双均线策略，不启用规则（`no_rules`）对比生产的日亏规则（`block_open`），合成日内路径、官方结算价（10 §4） | 约 2 分钟（两个方案并行） |
 
 ```powershell
 futrisk backtest run breaker_synthetic            # 结束时打印 "scenario checks: 16/16 passed"
@@ -530,7 +524,7 @@ futrisk backtest list
 futrisk backtest show <运行名>
 ```
 
-- 输出目录 `<home>\backtests\<名字>-<时间戳>\`：报告 `<输出目录>\report.html`，以及 `metrics.csv`、`events.parquet`、`summary.json`、`manifest.json`（配置哈希、数据哈希、随机种子、代码哈希，保证可复现）等。
+- 输出目录 `<home>\backtests\<名字>-<时间戳>\`：报告 `<输出目录>\report.html`，以及 `daily.csv`、`events.csv`、`orders.csv`、`summary.json`、`manifest.json`（配置哈希、数据哈希、随机种子、代码哈希，保证可复现）。
 - 配置从包内 `config\backtest\` 读取，改 `<home>\config\backtest\` 不起作用；自己的配置传 YAML 路径（11 §10.2）。
 - 也可以在仪表盘报表页"提交回测"，由 clearing-worker 在进程池中运行。
 
@@ -551,7 +545,7 @@ futrisk backtest show <运行名>
 
 ### 5.7 录制新浪真实行情
 
-真实 tick 是 C 层回测的数据来源（01 §8.16）。录制与仿真系统互不影响，可以同时运行。
+录下的真实 tick 作为真实行情样本保存（01 §8.13；精简版不再用它做回放）。录制与仿真系统互不影响，可以同时运行。
 
 ```powershell
 futrisk data sina-probe --symbols rb2701,IF2612        # 先确认网络和解析正常
@@ -572,7 +566,7 @@ futrisk data summary --td 20260928                     # 另开窗口查看录�
 
 | 时间 | 事项 |
 |---|---|
-| 前一天 | 在演示机器上完整排练一遍；运行 `futrisk doctor` 确认全部 PASS；预先跑好 `futrisk backtest run default`（约 2 小时；也可以直接打开 `docs/backtests/default.html`，即代码冻结后那次运行的报告），演示时直接打开报告 |
+| 前一天 | 在演示机器上完整排练一遍；运行 `futrisk doctor` 确认全部 PASS；预先跑好 `futrisk backtest run default`（约 2 分钟；也可以直接打开 `docs/backtests/default.html`，即精简版代码上那次运行的报告），演示时直接打开报告 |
 | 开场前 30 分钟内 | 用一个新 home 启动：`futrisk demo --home D:\futrisk-demo\home --headless --start-at 2026-09-28T09:20:00`（市场时间从 09:20 开始，开场时约 09:40，处于连续交易时段）；浏览器打开仪表盘并填好 key；准备好第二个 home 作为备用（§6.3） |
 | 开场前 1 分钟 | `futrisk status` 全部健康；仪表盘各页能正常打开；关闭无关窗口和通知 |
 
@@ -590,7 +584,7 @@ futrisk data summary --td 20260928                     # 另开窗口查看录�
 | 6 | 1:15 | `futrisk scenario run feed_outage`（`breaker` 剧本启动约 3 分钟后才结束，之前会返回 409）；仪表盘行情与系统页的行情源和行情事件；约 1 分钟后 `futrisk kill md-gateway` | Feed A 断开 → 状态 EXCLUDED，行情由 Feed B 接续、没有中断；重连后按序号续传，缺口作为补数重放：行情事件显示 `GAP_FILLED`（如"补齐 450 条，重复 0 条"），补数不进风控；Feed A 经 10s 观察期恢复 TRUSTED；之后的跳号、重复、乱序都被吸收。kill md-gateway：服务变红 → 重启 → 变绿，期间相关账户的行情质量变为 STALE / UNKNOWN、禁开，恢复后回到 OK |
 | 7 | 0:30 | 仪表盘多账户对比页 | 账户 × 规则使用率热力图；"谁最先触发"排名；各账户当日盈亏小多图叠加各自阈值（ACC3 穿过熔断线）；品种 × 账户敞口表 |
 | 8 | 1:00 | `futrisk clock jump --to 15:29`；约 1 分钟后 `futrisk settle status --td 20260928`（或报表页的阶段条）；`futrisk settle show --td 20260928`；`futrisk report daily --open`；`futrisk report statement ACC3` | 市场时钟跳转：暂停 → 跳转 → 全部服务确认新时钟 → 恢复，与生产共用同一套交易日历；15:30 自动开始 EOD：冻结 → 三方核对成交 → 结算价（来源一列：有成交的取 VWAP，没有的走回退链）→ 逐日盯市和保证金（Decimal）→ 对账检查全部通过 → 换日 → 日报和结算单；日报的"事件与动作"一节记录了 ACC3 的熔断；换日后锁存按配置解除 |
-| 9 | 0:30 | `futrisk backtest run breaker_synthetic`；打开事先跑好的 `default` 回测报告（`futrisk backtest list` 找到运行名） | 回测用同一个 `EngineCore` 回放：合成剧本 16 项断言全部通过、几秒完成；配对实验对比无规则与各动作档位的收益、回撤、Calmar，结论见 10 文档 |
+| 9 | 0:30 | `futrisk backtest run breaker_synthetic`；打开事先跑好的 `default` 回测报告（`futrisk backtest list` 找到运行名） | 回测用同一个 `EngineCore` 回放：合成剧本 16 项断言全部通过、几秒完成；配对实验对比无规则与生产日亏规则的收益和回撤，并列出规则生效的每一个账户日，结论见 10 文档 |
 | 10 | 0:30 | 编辑 `<home>\config\risk_rules.yaml`（如把 `daily_loss` 的 warn 从 `-0.020` 改为 `-0.019`）→ `futrisk config validate --home <home>` → `POST /api/v1/config/reload`（§5.4）→ 行情与系统页的配置列 | 两阶段提交：全部 7 个内部实例一起切到新版本（配置列同一个版本号和哈希），约 1s 完成；风控阈值即时生效；如果改的是只能重启生效的项（如 `feeds.yaml` 的 `poll_ms`），整轮被否决，全部保持原版本 |
 
 步骤 4 的剧本约 2 分钟后才熔断，等待时可以讲解账户页的日内曲线（虚线阈值、限制和熔断期间的底色）和规则使用率。步骤 8 之后账户已换到下一交易日；如果还要继续演示盘中功能，执行 `futrisk clock jump --to next-open`。
@@ -673,3 +667,4 @@ futrisk 的业务时间一律按北京时间（`Asia/Shanghai`）计算，与操
 |---|---|---|
 | v0.1 | 2026-09-25 | 初版：安装与启停、home、端口、API key；仪表盘五个页面的内容与按角色的操作（截图占位）；全部 CLI 命令及示例（按各命令的 `--help` 核对）和只有 REST 入口的操作；EOD、报表、热加载、回测、故障注入、新浪录制的操作步骤；约 8 分钟的现场演示脚本和备用方案；故障排除。演示脚本在独立 home（换用一组端口）上完整执行验证：熔断三级各告警一次、kill risk-engine-1 后约 3s 恢复且熔断保持、Feed A 中断补齐 450 条且重复 0 条、跳到 15:29 后 EOD 约 2s 完成并生成日报和结算单、热加载约 0.6s 全部提交 |
 | v0.2 | 2026-09-26 | 代码冻结后：第 3 章的截图全部换成真实运行的系统（总览与对比页取自 ACC3 熔断锁存之后，另有 Feed A 中断补数和 EOD 后的报表），并加注截图条件；§5.5 的回测耗时改为代码冻结后的实测值 |
+| v0.3 | 2026-09-26 | 范围精简（完整版保留为 git 标签 `v0.1-full`）：§4.8 删除 `bench`、`backtest sweep`、`backtest bench`；§5.5 回测配置只剩 `breaker_synthetic` 与 `default`，输出文件改名；§5.7 录制的 tick 只作行情样本；演示脚本相应修改 |

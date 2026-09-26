@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-DBDD-03 |
-| 版本 | v0.6（实现对齐：与代码逐项核对后的版本） |
+| 版本 | v0.7（精简版，完整版为 git 标签 `v0.1-full`） |
 | 状态 | 实现对齐 |
 | 日期 | 2026-09-26 |
 | 适用范围 | 各服务的 SQLite 库（生产环境可迁移到 PostgreSQL）、tick 与回测 Parquet 文件、报表文件 |
@@ -40,7 +40,7 @@
 | api.db | `db/api.db` | api-gateway（**单实例**，它是 api.db 的唯一写者） | API key、接口审计、通知、配置版本、人工 kill switch 的期望状态 |
 | supervisor.db | `db/supervisor.db` | supervisor | 进程事件、市场时钟、outbox |
 | tick 文件 | `ticks/raw/…`、`ticks/canonical/…`、`ticks/wire/…`、`ticks/spill/…` | md-gateway；新浪录制工具 | 原始 tick 与去重后的规范 tick；新浪原始 HTTP 应答；写入失败时的备用目录（Parquet，见 §5.1） |
-| 历史数据 | 仓库内的 `data/hist/…` | 开发期脚本（运行时只读） | 回测用的历史日线和分钟线（§5.2） |
+| 历史数据 | 仓库内的 `data/hist/…` | 开发期脚本（运行时只读） | 回测用的历史日线（§5.2） |
 | 回测与报表文件 | `backtests/…`、`reports/…` | clearing-worker | §5.2、§5.3 |
 | sim.db（外部模拟组件） | `db/sim.db` | sim-exchange | 模拟柜台的委托、成交、持仓和序号，以及价格引擎的当日累计状态（§4.7），用来模拟真实柜台和行情"重启不丢状态"的特性 |
 
@@ -55,7 +55,7 @@
 
 | 编号 | 决策 | 理由 |
 |---|---|---|
-| DB-01 | **每个服务一个库，库的写者唯一**。其他服务**禁止**直接读写别人的库，只能通过总线交换数据。数据库从不共享；共享的只有以下几个目录，每个都只有一个写者，其余进程只读：<br>• `config/`：api-gateway 写入（版本快照 `config/versions/{N}/` 和 `active.json`，02 §8.5），其他服务只读；<br>• `reports/`、`backtests/`：clearing-worker 写入，api-gateway 只读，用来下载报表；<br>• `ticks/`：md-gateway 录制，clearing-worker 只读（回测的 C 层数据）。<br>docker compose 部署（`deploy/compose.yml`）按同样的划分挂载卷：这几个目录各是一个共享卷，只有写者以读写方式挂载；另有一个一次性的建账容器，以只读方式挂载 api-gateway 的 home，只为读取 bootstrap 管理员 key。没有单独的密钥卷 | 所属关系清晰；各库独立演进；故障相互隔离（01 ADR-010） |
+| DB-01 | **每个服务一个库，库的写者唯一**。其他服务**禁止**直接读写别人的库，只能通过总线交换数据。数据库从不共享；共享的只有以下几个目录，每个都只有一个写者，其余进程只读：<br>• `config/`：api-gateway 写入（版本快照 `config/versions/{N}/` 和 `active.json`，02 §8.5），其他服务只读；<br>• `reports/`、`backtests/`：clearing-worker 写入，api-gateway 只读，用来下载报表。<br>docker compose 部署（`deploy/compose.yml`）按同样的划分挂载卷：这几个目录各是一个共享卷，只有写者以读写方式挂载；另有一个一次性的建账容器，以只读方式挂载 api-gateway 的 home，只为读取 bootstrap 管理员 key。没有单独的密钥卷 | 所属关系清晰；各库独立演进；故障相互隔离（01 ADR-010） |
 | DB-02 | 使用 SQLite，开启 WAL；每个库只有一个写库线程，采用批量事务；写事务一律 `BEGIN IMMEDIATE` | 零运维，可以打进 exe；单写者不会发生写锁升级失败 |
 | DB-03 | PRAGMA 设置：`journal_mode=WAL`、`foreign_keys=ON`、`busy_timeout=5000`；读连接设 `query_only=ON`。`synchronous` 按库和事务区分：<br>• md、risk 库默认为 `NORMAL`：提交时不 fsync，进程崩溃不丢数据，只有断电或操作系统崩溃时，可能丢失最后几条提交；<br>• risk 库中的**关键事务**在提交前临时切换为 `FULL`，逐次落盘：锁存熔断与解除、kill switch 与公司级控制、出入金、EOD 冻结与换日、对账异常、减仓计划、人工命令；<br>• td、clearing、api、supervisor 库整库使用 `FULL`：它们要么写入量小，要么不在下单往返的路径上 | 下单往返的延迟目标（01 §1.2）容不下每条委托意图都 fsync，笔记本上一次 fsync 就要毫秒级。断电时丢失的高频写入都能补回：成交从 trade-gateway 重新拉取，委托按 `td.query.orders` 补建（02 §8.3），行情本来就可以重新获取；而熔断锁存这类必须"任何重启后都保持"的状态，仍然逐次落盘 |
 | DB-04 | 通过 SQLAlchemy Core 访问，用一份 `MetaData` 定义表结构，按方言生成 DDL；生产环境迁移到 PostgreSQL 时，每个服务一个 schema | 只需维护一份表定义 |
@@ -1240,7 +1240,6 @@ sim.db 不属于 futrisk 的服务，只是为了让模拟柜台像真实柜台�
 
 **用途**：
 - EOD 时从这些文件重新计算 `settle_inputs`（§4.1）；
-- 作为 C 层回测的回放数据；
 - 用于事后审计和补数统计。
 
 ### 5.2 历史数据与回测输出
@@ -1248,11 +1247,13 @@ sim.db 不属于 futrisk 的服务，只是为了让模拟柜台像真实柜台�
 | 文件 | 路径 | 内容 |
 |---|---|---|
 | 逐合约日线 | `data/hist/daily/{exchange}/{product}.parquet` | 列：`trading_day`、`instrument_id`、`open`、`high`、`low`、`close`、`settle`、`pre_settle`、`volume`、`open_interest`、`is_main`（前一交易日持仓量最大的合约为主力）。SHFE/CFFEX 数据来自交易所，DCE 数据来自新浪连续合约 |
-| 分钟线 | `data/hist/minute/{period}/{symbol}.parquet` | 列：`datetime`、`open`、`high`、`low`、`close`、`volume`、`hold`（新浪 60/15/5 分钟线） |
+| 分钟线 | `data/hist/minute/{product}_{period}m.parquet` | 新浪 60/15/5 分钟线，只作 `SOURCES.md` 中数据校验的依据，回测不读取 |
 | 数据来源说明 | `data/hist/SOURCES.md` | 抓取时间、所用接口、换月识别规则、已知缺陷 |
 | 回测报告 | `backtests/{run_id}/report.html` | 自包含的 HTML |
-| 回测指标 | `backtests/{run_id}/metrics.csv` | 两组对照（有风控 / 无风控）各自的 MDD、Calmar、CVaR、触发次数等，UTF-8 带 BOM |
-| 回测事件 | `backtests/{run_id}/events.parquet` | 列：`arm`、`ts_ns`、`trading_day`、`account_id`、`kind`、`rule_id`、`level`、`value`、`threshold`、`action`、`classification`（`CERTAIN` / `IMPOSSIBLE` / `AMBIGUOUS`） |
+| 回测逐日数据 | `backtests/{run_id}/daily.csv` | 每个方案、账户、交易日一行：结算数字（权益、日盈亏、手续费、保证金、风险度、净值）、各级别是否触发及触发值、是否锁存、被拒的开仓和加仓、是否换月日、是否用了估计的结算价；UTF-8 带 BOM |
+| 回测事件 | `backtests/{run_id}/events.csv` | 列：`run`、`arm`、`tier`、`threshold`、`trading_day`、`ts_ns`、`ts`、`account_id`、`kind`、`rule_id`、`level`、`action`、`severity`、`latched`、`value`、`threshold_value`、`alert_key`、`episode`、`step`、`message` |
+| 回测委托 | `backtests/{run_id}/orders.csv` | 每笔委托：方案、交易日、账户、合约、方向、开平、手数、价格、用途、是否受理、应答码 |
+| 回测摘要 | `backtests/{run_id}/summary.json` | 各方案各账户的统计、相对基线的差值、规则生效日明细、一致性检查（10 §2.5） |
 | 运行清单 | `backtests/{run_id}/manifest.json` | `config_hash`、`data_hash`、`seed`、`git_sha`、版本号，与 `backtest_runs` 表一致 |
 
 ### 5.3 报表文件（由 clearing-worker 生成，登记在 `reports` 表中）
@@ -1445,4 +1446,5 @@ sim.db 不走这套机制，用 `PRAGMA user_version` 记版本，当前为 2：
 | v0.4 | 2026-09-25 | 需求对齐审查后的修订：`metric_samples` 增加 `nav`；数据生命周期表增加日志文件；需求可追踪性补充指标留存和日志 |
 | v0.5 | 2026-09-25 | 设计问题复核后的修订：<br>1）DB-03 改为 md、risk 库默认 `NORMAL`，risk 库的关键事务和其余各库用 `FULL`；<br>2）`db_meta` 增加 `clean_shutdown`、`host_boot_ns`，断电后重新生成流 ID；<br>3）supervisor.db 新增 `clock_state`；<br>4）减仓计划换日时只作废尚未确认的 |
 | v0.6 | 2026-09-26 | 实现对齐：以代码为准逐表逐列核对，并交给校验脚本机械核对（`scripts/check_docs.py` 导入各服务的 `schema.py`，核对每张表、每一列及其可空性）。主要修订：<br>1）补齐代码中已有而本文缺少的内容：clearing 库的 `config_history`（配置版本的结算生效日）、api 库的 `kill_switch`（人工 kill switch 的期望状态）、`watermarks.wm_fingerprint`、`routed_orders.cancel_requested_ns`、`orders` 的撤单重发记录、`service_events.env_keys` / `detail`；<br>2）写明 `eod_runs.step_log` 的键，以及恢复时原样复用的输入；<br>3）§9 按实现重写：迁移写在各服务 `schema.py` 的 `MIGRATIONS` 中，三种迁移体及其 checksum、拒绝启动的条件、枚举取值按迁移冻结；新增 §9.1 各库的迁移历史（md 2、td 3、risk 3、clearing 2、api 2、supervisor 2）；<br>4）DB-01 列出全部共享目录及其唯一写者，与 docker compose 的卷划分一致 |
+| v0.7 | 2026-09-26 | 范围精简（完整版保留为 git 标签 `v0.1-full`）：§5.2 的回测输出改为 `daily.csv`、`events.csv`、`orders.csv`、`summary.json`；分钟线只作数据校验的依据；§5.1 与 DB-01 删除 C 层回测这一用途（`ticks/` 不再共享） |
 

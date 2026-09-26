@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-COM-08 |
-| 版本 | v0.2（按已实现的系统编写） |
+| 版本 | v0.3（精简版，完整版为 git 标签 `v0.1-full`） |
 | 状态 | 实现对齐 |
 | 日期 | 2026-09-26 |
 | 适用范围 | Windows exe 的构建、安装与升级；docker compose 部署；日志、监控、重启、备份恢复、配置版本等日常运维；上线前的生产差距 |
@@ -80,7 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_exe.ps1 -SkipW
 
 ```text
 dist\
-  futrisk\                         约 195MB
+  futrisk\                         约 192MB
     futrisk.exe                    一个 exe 带全部子命令；supervisor 用 `futrisk.exe svc <name>` 拉起每个服务
     _internal\                     Python 运行时、扩展模块和 DLL（含 libzmq）、数据文件：
       futrisk\web_static\dist\     仪表盘
@@ -117,7 +117,7 @@ dist\
 | `sim-exchange` | `futrisk svc sim-exchange` | supervisor 健康 | Feed B 的 `/v1/health` | 自己的 home 卷；`config`（只读） |
 | `md-gateway` | `futrisk svc md-gateway` | sim-exchange 已启动 | — | home；`config`（只读）；`ticks`（写） |
 | `trade-gateway` | `futrisk svc trade-gateway` | md-gateway 已启动 | — | home；`config`（只读） |
-| `clearing-worker` | `futrisk svc clearing-worker` | trade-gateway 已启动 | — | home；`config`（只读）；`reports`、`backtests`（写）；`ticks`（只读） |
+| `clearing-worker` | `futrisk svc clearing-worker` | trade-gateway 已启动 | — | home；`config`（只读）；`reports`、`backtests`（写） |
 | `risk-engine-0` / `risk-engine-1` | `futrisk svc risk-engine --shard 0` / `1` | clearing-worker 已启动 | — | home；`config`（只读） |
 | `api-gateway` | `futrisk svc api-gateway` | 两个风控分片已启动 | `/api/v1/health` | home；`config`（写：热加载在这里生成新版本）；`reports`、`backtests`（只读） |
 | `strategy-sim` | `futrisk svc strategy-sim` | api-gateway 已启动 | — | home；`config`（只读） |
@@ -157,7 +157,7 @@ docker compose -f deploy/compose.yml down                  # 停止；加 -v 同
 |---|---|---|
 | 进程管理 | supervisor 拉起、崩溃重启 | 容器重启策略；`svc.start/stop/restart/kill` 回 `PRECONDITION_FAILED`（ADR-021） |
 | `futrisk kill`、仪表盘"Kill 服务"和"重启" | 可用 | 不可用；用 `docker compose restart <服务>` |
-| home | 所有服务共用一个 | 每个服务一个卷；`config`、`reports`、`backtests`、`ticks` 四处共享（01 §7.2） |
+| home | 所有服务共用一个 | 每个服务一个卷；`config`、`reports`、`backtests` 三处共享，`ticks` 卷只由 md-gateway 使用（01 §7.2） |
 | 修改配置 | 编辑 `<home>\config\` 后热加载 | 把文件复制进 api-gateway 容器的 `/var/lib/futrisk/config/`（`docker compose -f deploy/compose.yml cp risk_rules.yaml api-gateway:/var/lib/futrisk/config/risk_rules.yaml`），再在宿主机上调用 `POST http://127.0.0.1:8000/api/v1/config/reload` |
 | 日志 | `<home>\logs\` | `docker compose logs`（控制台）；JSON 日志在各服务卷的 `logs/` 中 |
 
@@ -295,7 +295,7 @@ risk 库丢失时，可以用 clearing 最近一次的日初快照加上 trade-g
 | live 档新浪转发 | TD-12 | sim-exchange 不转发真实价格 | 生产环境直接接 CTP 行情和厂商源 |
 | 补数区间的事后审计 | TD-13 | `RETRO_BREACH` 影子评估未实现 | — |
 | 公司层高水位和锁存 | TD-14 | 公司层高水位只在内存中；公司级锁存没有人工解除命令 | 持久化并增加审计的重置命令 |
-| 回测回放吞吐 | TD-15 | 约 0.6~1 万 tick/s，低于 10 万的目标 | 标量快路径估值、向量化策略 |
+| 研究级回测 | TD-15 | 精简版只有两个方案和确定路径；路径集合、阈值扫描等大规模实验在完整版 `v0.1-full` 中，回放吞吐约 0.6~1 万 tick/s，低于 10 万的目标 | 恢复这些实验时再优化：标量快路径估值、向量化策略 |
 | 部分验收度量没有自动化 | TD-16 | QS-05 事件哈希基线、QS-10 仪表盘延迟、性质测试例数 | 补自动化测试 |
 | 性能目标 | 01 §10.2 | 下单往返、tick→判定等在负载较高的笔记本上未达标，待安静机器复测（13 文档） | 检出完整版 `v0.1-full`，在生产硬件上用 `futrisk bench` 复测，必要时按 01 §8.12 的扩展顺序优化 |
 
@@ -336,3 +336,4 @@ risk 库丢失时，可以用 clearing 最近一次的日初快照加上 trade-g
 |---|---|---|
 | v0.1 | 2026-09-25 | 初版：exe 构建参数、冒烟测试、产物与安装升级；docker compose 的服务、卷、健康检查、时钟与差别；日志、监控、重启策略、备份保留与恢复、配置版本与回滚（含离线提交步骤，已在测试 home 上验证）、EOD 后检查；按 01 §8.17 与 §11 核对代码后的技术债表，新发现问题 10 条，上线前检查清单 |
 | v0.2 | 2026-09-26 | 代码冻结后的核对：日志的 `ts` 与每日切分改为北京时间（与本机时区无关），只有文件名中的日期仍取本机日期，§4.1 与生产差距第 7 项随之更正；exe 重新构建，产物大小与冒烟测试结果见 06 §7.5 |
+| v0.3 | 2026-09-26 | 范围精简（完整版保留为 git 标签 `v0.1-full`）：clearing-worker 不再挂载 `ticks` 卷；性能复测改为检出完整版；生产差距表中回放吞吐一行按精简版改写 |

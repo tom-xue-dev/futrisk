@@ -39,7 +39,7 @@
 #              config/versions/<N> from its own home; config-init creates version 1.
 #   reports    written by clearing-worker, served by api-gateway (read-only there)
 #   backtests  written by clearing-worker, served by api-gateway (read-only there)
-#   ticks      recorded by md-gateway, read by clearing-worker backtests of layer C (read-only)
+#   ticks      md-gateway's tick recordings (a volume of their own, easy to copy out; not shared)
 #
 # One-shot helpers: config-init (creates config version 1 on the shared volume before anything
 # else starts) and seed (seeds the first-day books once api-gateway is healthy).
@@ -144,7 +144,6 @@ services:
       - config:/var/lib/futrisk/config:ro
       - reports:/var/lib/futrisk/reports
       - backtests:/var/lib/futrisk/backtests
-      - ticks:/var/lib/futrisk/ticks:ro
 
   risk-engine-0:
     <<: *futrisk

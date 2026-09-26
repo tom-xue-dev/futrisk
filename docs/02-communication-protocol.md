@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-IDD-02 |
-| 版本 | v0.6（实现对齐：与代码逐项核对后的版本） |
+| 版本 | v0.7（精简版，完整版为 git 标签 `v0.1-full`） |
 | 状态 | 实现对齐 |
 | 日期 | 2026-09-26 |
 | 适用范围 | 内部总线（ZeroMQ）、外部接口（行情源、模拟柜台、控制接口、REST/WS、webhook）、进程内模块接口 |
@@ -1334,7 +1334,7 @@ api-gateway 同样实现 §6.1 的通用控制命令。api-gateway 的 HTTP 端�
 | `submitted_ns` | int | 是 | 提交时刻 |
 | `started_ns` / `finished_ns` | int? | 否 | 开始 / 结束时刻 |
 | `report_id` | str? | 否 | 关联的报表（`BACKTEST_HTML`） |
-| `summary` | dict? | 否 | 两组对照（有风控 / 无风控）各自的最大回撤、Calmar、触发次数等 |
+| `summary` | dict? | 否 | 运行摘要：`arms` 配置为每个方案一个对象（全部账户合计的收益、最大回撤、最差单日、锁存天数、被拒开仓；规则方案另有生效账户日和当日 / 次日效果合计），`scenario` 配置为检查项数与通过数（10 §6） |
 | `error` | str? | 否 | 失败原因 |
 
 ### 7.9 系统类
@@ -2387,3 +2387,4 @@ ADMIN 可以做所有操作；TRADER 和 RISK_MANAGER 互不包含。角色不�
 | v0.4 | 2026-09-25 | 需求对齐审查后的修订：`AccountMetricsView` 和 `MetricSeries` 增加单位净值 `nav`；Feed A 写明推送频率；熔断撤单改为进入 HALTED（含待确认阶段）时就执行；`futrisk logs` 改为直接读本地日志；需求可追踪性按 task.md 原文对齐 |
 | v0.5 | 2026-09-25 | 设计问题复核后的修订：<br>1）新增市场时钟：`sys.clock`、`svc.clock`、`ClockState`、`ClockMode`、`ClockTarget`，心跳增加 `clock_version`，新增 §8.8 跳转流程；sim 控制接口用 pause / clock / resume 取代 session，REST 用 `/demo/clock` 取代 `/demo/fast-forward`；<br>2）首次启动：bootstrap ADMIN key；risk-engine 加载阶段的重试规则；加载阶段接受建账推送；clearing-worker 补推未确认的分片；<br>3）断电后本地没有记录的委托，按 `td.query.orders` 补建；<br>4）减仓计划只生成和确认，不自动执行，`LiquidationStatus` 删去 EXECUTING 和 DONE 两个状态；<br>5）出入金记入交易日的措辞改为不会被读成 T+2 |
 | v0.6 | 2026-09-26 | 实现对齐：以代码为准逐项核对全文，并把一部分核对交给校验脚本：`scripts/check_docs.py` 直接导入代码，核对每个消息结构的字段及是否必填、每个枚举的取值、`futrisk.messages.codes` 的每个错误码、文档中出现的每个 `FUTRISK_*` 环境变量（§3.1）；主题、命令、负载类型名只在文档之间核对，白名单、REST 端点、错误码到 HTTP 的映射、WS 主题靠人工逐项核对。主要修订：<br>1）新增枚举值 `FirmAction.RULE_STATE`（规则层的完整状态，`risk.control.firm` 只看最新一条即可恢复）、`DayRollMode.CATCH_UP`（多日补结算）、`ServiceChangeReason.GAVE_UP` / `SUPERVISOR_RESTART`；新增原因码 `MD_REJECT_INTEGRITY` 和 trade-gateway 的缺省柜台码；新增 `Tick.flags` 的 `WM_RESET` 位（水位回退，§5 的 `order_key` 递增保证的唯一例外）；<br>2）新增命令 `risk.query.liquidation_plans`（`QueryLiquidationPlans` / `LiquidationPlanBatch`）；`Pong` 增加 `home_id`、`pid`，`ServiceList` 增加 `home_id`，`SvcRequest` 增加 `env`，`ServiceInfo` / `ServiceStateChanged` 增加 `env_keys` 等，`SnapshotRequest` 增加分页字段，`SettleInput` 增加 `hourly`，`MetricPoint` 增加 `rule_util`；<br>3）全部字段表统一为四列，"必填"与代码的默认值一致，并说明线上省略默认值（§4.3）；新增 §7.11 嵌套结构一览，所有 `Struct` 都有定义；新增 §7.3 的字符串固定取值表；<br>4）订阅矩阵和命令调用矩阵按实际的订阅和调用修正（risk-engine 不订阅 `td.status`，coordinator 只订阅 `risk.snapshot.`，api-gateway 不调 `td.query.*` 等）；新增 §4.12 发布方化身的判定规则（以心跳为准，不比较 UUIDv7）；§4.7 补充服务端校验顺序和 `request_hash` 的唯一算法；§4.11 补充 home 标识和下游的角色复核清单；<br>5）§6 各命令补齐实现细节：trade-gateway 暂存委托、持久化撤单、柜台不可用；clearing-worker 的 `settle.run` 前提、`settle.seed_sod` 的拒绝条件、`ImportAck` 语义；supervisor 的 `env`、放弃重启、只管时钟模式；risk-engine 的当日以外查询、启动期间和致命错误之后的应答；<br>6）§8.3 补充撤单超时与重发、撤单被拒、熔断不变量、换日过期、会话丢失；§8.4 补充固定快照与配置版本、严格按顺序结算、多日补结算与连续性、回退到 FROZEN、换日后重新结算、`SETTLED` 之后永不失败和 WARN 事件；§8.6 补充 risk-engine 的启动阶段；§8.8 补充时钟跳转的失败处理；<br>7）§9.5 按控制接口实现补齐（`DELETE /control/scenario`、剧本变量、`FEED_DISCONNECT` 的 `silent` 模式、`MALFORMED` 的模式、强平的方向）；§9.6 给出完整端点表（64 个，含 `/auth/me`、`/settlement/days`、`/risk/liquidation-plans`、`/demo/*` 代理）、每个错误码的 HTTP 状态（413、429、502）、幂等重放、请求体上限、`/health` 身份字段；§9.7 按 WS hub 修订帧格式（`mts`、`kind`，没有 `delete` 帧）、新增 `backtests` 主题和各项会话限额；§9.8 按通知服务修订来源、`notify_key`、恰好一次和防刷屏；§10 按实际接口修订；<br>8）代码冻结前的最后一轮：新增 §3.1 进程环境变量；`RuleStatus` 增加 `hard_utilization` / `hard_level`（硬限额使用率，仪表盘、指标样本和日报共用这一个定义），`utilization` 明确为相对下一级别；`ExposureView` 增加 `quality`；`AccountSnapshot.quality` 改为按 `system.quality_stale_tolerance` 容忍的口径；`/system/status.firm_control` 写明结构；§9.6 补充仪表盘页面的安全响应头、缓存和压缩 |
+| v0.7 | 2026-09-26 | 范围精简（完整版保留为 git 标签 `v0.1-full`）：`BacktestStatus.summary` 按精简后的回测改写 |
