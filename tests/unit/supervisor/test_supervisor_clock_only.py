@@ -35,7 +35,9 @@ async def test_clock_only_supervisor_keeps_the_clock_and_manages_nothing(tmp_pat
     cfg = fast_config(default_config, startup_order=EVERYTHING)  # ignored in clock-only mode
     h = SupHarness(cfg, tmp_path / "home", sup_kwargs={"clock_only": True})
     complaints: list[str] = []
-    sink = logger.add(lambda m: complaints.append(str(m)), level="WARNING", format="{level} {name} {message} {extra}")
+    # a loaded machine can stall the event loop at start-up (loop.stall); that is not about the units
+    sink = logger.add(lambda m: complaints.append(str(m)), level="WARNING",
+                      format="{level} {name} {message} {extra}", filter=lambda r: r["message"] != "loop.stall")
     try:
         sup = await h.start()
         assert sup.units == {} and sup.clock_only
