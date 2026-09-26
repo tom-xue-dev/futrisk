@@ -38,7 +38,6 @@ SUBAPPS: list[tuple[str, str]] = [
 TOPLEVEL: list[str] = [
     "futrisk.cli.ops_cmd",
     "futrisk.cli.tools_cmd",
-    "futrisk.cli.bench_cmd",
 ]
 
 

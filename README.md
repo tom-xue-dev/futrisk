@@ -132,7 +132,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_exe.ps1
 | [10-backtest-analysis.md](docs/10-backtest-analysis.md) | 回测方法、结果与规则有效性分析 |
 | [11-config-reference.md](docs/11-config-reference.md) | 配置参考（由 pydantic 模型生成） |
 | [12-code-walkthrough.md](docs/12-code-walkthrough.md) | 代码导读 |
-| [13-benchmarks.md](docs/13-benchmarks.md) | 性能基准：方法、结果与未达标项分析 |
+| [13-benchmarks.md](docs/13-benchmarks.md) | 性能基准：方法、结果与未达标项分析（基准工具在完整版 `v0.1-full` 中） |
 
 ## 目录结构
 
@@ -142,7 +142,7 @@ src/futrisk/          Python 包（代码导读见 docs/12）
   services/           6 个服务：md_gateway、risk_engine、trade_gateway、clearing、api_gateway、supervisor
   messages/ bus/ db/ runtime/   消息契约、ZeroMQ 总线、SQLite 访问层、服务运行时
   sim/                虚拟交易所（exchange）和策略机器人（bots）
-  backtest/ bench/    回测、性能基准
+  backtest/           回测
   cli/  main.py       命令行
   web_static/dist/    构建好的仪表盘
 web/                  仪表盘源码（Vue 3 + TypeScript）

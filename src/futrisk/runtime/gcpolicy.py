@@ -3,12 +3,13 @@
 CPython's cyclic GC stops the whole process while it runs. A full (gen2)
 collection traverses every tracked object - the restored book, caches,
 config, module objects - and took 56-250 ms in the risk-engine,
-md-gateway-ingest and backtest benches. Both runtimes apply this policy:
+md-gateway-ingest and backtest benchmarks (``futrisk bench`` of the full
+version, git tag ``v0.1-full``). Both runtimes apply this policy:
 
 * **at start** (``RuntimeBase`` right after loading the config):
   ``gc.set_threshold(*threshold)`` - by default ``(10_000, 20, 100)``: 10,000
   net container allocations per young collection instead of 700. Measured in
-  ``bench order_rtt`` (30 s windows): 700 -> ~160-230 young, 15-21 middle and
+  the ``order_rtt`` benchmark (30 s windows): 700 -> ~160-230 young, 15-21 middle and
   1-2 full collections per window even with the freeze; 10,000 -> ~7 young and
   none else; 50,000 -> ~1, but a young collection then walks up to 50,000
   objects (~1 ms synthetic, 17-35 ms observed on the loaded machine) and a

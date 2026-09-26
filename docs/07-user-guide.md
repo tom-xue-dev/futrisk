@@ -124,7 +124,6 @@ futrisk demo is running (http://127.0.0.1:8000); press Ctrl-C to stop every serv
   ticks/wire/<交易日>/sina/     新浪原始应答归档（`futrisk data rebuild` 用）
   reports/<交易日>/             风控日报 risk_daily.html、结算单 statement_<账户>.txt/.csv、settlement.json
   backtests/<名字>-<时间戳>/    回测输出
-  bench/                        `futrisk bench` 的结果
   secrets/bootstrap_admin.key   bootstrap ADMIN key（只有当前用户可读）
   logs/<实例>_<YYYYMMDD>.log    每个实例的 JSON 日志；<实例>.console.log 为控制台输出
 ```
@@ -360,9 +359,8 @@ SHFE 的平仓必须区分 `close-today` 和 `close-yesterday`；DCE、CFFEX 用
 | `backtest list` | 包内回测配置和 `<home>\backtests` 下最近的运行 | `--limit` | `futrisk backtest list` |
 | `backtest show` | 一次运行的清单（哈希、种子、耗时）和主要数字 | `运行目录或名字` | `futrisk backtest show breaker_synthetic-20260925T222421` |
 | `backtest bench` | 一个方案的回放吞吐（tick/s） | `--start`、`--days`、`--tier`、`--profile`、`--static` | `futrisk backtest bench --days 60 --profile` |
-| `bench` | 性能基准：总线、行情接入、tick→判定、下单往返、事前检查、回放、冷启动恢复，与设计目标对比 | `名字...`（默认全部）、`--quick`、`--out <文件>`（另写 Markdown 表）、`--json`、`--set 基准.键=值` | `futrisk bench pretrade --quick` |
 
-回测结果写在 `<home>\backtests\<名字>-<时间戳>\`，方法和结论见 10 文档；性能基准结果写在 `<home>\bench\`，见 13 文档。
+回测结果写在 `<home>\backtests\<名字>-<时间戳>\`，方法和结论见 10 文档；性能基准的结果见 13 文档（基准工具只在完整版 `v0.1-full` 中）。
 
 ### 4.9 行情数据（新浪）
 

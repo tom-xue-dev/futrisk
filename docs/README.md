@@ -30,7 +30,7 @@
 | 编号 | 文档 | 对应 GB/T 8567 类型 | 状态 |
 |---|---|---|---|
 | FR-DOC-00 | [README.md](README.md)：文档规范与索引（本文） | — | 实现对齐（v0.6） |
-| FR-SSDD-01 | [01-architecture.md](01-architecture.md)：整体架构说明 | SSDD 系统/子系统设计说明 | 实现对齐（v0.6） |
+| FR-SSDD-01 | [01-architecture.md](01-architecture.md)：整体架构说明 | SSDD 系统/子系统设计说明 | 实现对齐（v0.7） |
 | FR-IDD-02 | [02-communication-protocol.md](02-communication-protocol.md)：服务与模块间通信协议 | IDD 接口设计说明 | 实现对齐（v0.6） |
 | FR-DBDD-03 | [03-database-schema.md](03-database-schema.md)：数据库设计与字段说明 | DBDD 数据库设计说明 | 实现对齐（v0.6） |
 | FR-SRS-04 | [04-risk-rules.md](04-risk-rules.md)：风控指标、阈值与理由 | SRS 软件需求规格说明（部分） | 实现对齐（v0.6） |
@@ -42,7 +42,7 @@
 | FR-DOC-10 | [10-backtest-analysis.md](10-backtest-analysis.md)：回测方法、结果与规则有效性分析 | —（分析报告） | 实现对齐（v0.1） |
 | FR-DOC-11 | [11-config-reference.md](11-config-reference.md)：配置参考，由 pydantic 模型自动生成（`scripts/gen_config_reference.py`） | —（参考手册） | 实现对齐（v0.1） |
 | FR-DOC-12 | [12-code-walkthrough.md](12-code-walkthrough.md)：代码导读 | SDD 的补充 | 实现对齐（v0.1） |
-| FR-DOC-13 | [13-benchmarks.md](13-benchmarks.md)：性能基准结果与分析（`futrisk bench`） | STR 的附件 | 实现对齐（v0.1） |
+| FR-DOC-13 | [13-benchmarks.md](13-benchmarks.md)：性能基准结果与分析（完整版 `v0.1-full` 的 `futrisk bench`） | STR 的附件 | 实现对齐（v0.2） |
 
 另有两个资料目录：[`screenshots/`](screenshots/) 是 07 引用的仪表盘截图（真实运行的系统），[`backtests/`](backtests/) 是 10 引用的回测报告副本（代码冻结后的运行，自包含 HTML，可以直接用浏览器打开）。
 

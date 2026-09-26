@@ -43,7 +43,7 @@
 | 包 / 文件 | 职责 |
 |---|---|
 | `main.py` | CLI 入口：Typer 应用，按需加载 `cli/` 的子命令（`futrisk svc` 只加载服务子命令，启动更快） |
-| `cli/` | 命令行：`ops_cmd.py`（up、down、ps、status、logs、kill、demo）、`trading_cmd.py`（positions、accounts、order、risk）、`eod_cmd.py`（settle、report）、`democtl_cmd.py`（fault、shock、scenario、clock）、`doctor_cmd.py`、`data_cmd.py`、`config_cmd.py`、`svc_cmd.py`、`backtest_cmd.py`、`bench_cmd.py`；`apiclient.py`、`toolkit.py` 为 REST 客户端和输出 |
+| `cli/` | 命令行：`ops_cmd.py`（up、down、ps、status、logs、kill、demo）、`trading_cmd.py`（positions、accounts、order、risk）、`eod_cmd.py`（settle、report）、`democtl_cmd.py`（fault、shock、scenario、clock）、`doctor_cmd.py`、`data_cmd.py`、`config_cmd.py`、`svc_cmd.py`、`backtest_cmd.py`；`apiclient.py`、`toolkit.py` 为 REST 客户端和输出 |
 | `common/` | 基础设施中与业务无关的部分：`config/`（pydantic 配置模型、加载、哈希、版本快照）、`paths.py`（home 布局、home 身份）、`clock.py`（北京时间、`SystemClock`、`SimClock`、市场时钟）、`calendar.py`（交易日历与交易时段）、`decimals.py`（Decimal 与 ROUND_HALF_UP）、`ids.py`（UUIDv7）、`logging.py`（JSON 日志） |
 | `messages/` | 消息契约：msgspec 结构（`md`、`orders`、`risk`、`eod`、`system`、`common`）、信封 `envelope.py`、主题 `topics.py`、枚举 `enums.py`、错误码 `codes.py`、编解码与 `request_hash`（`base.py`） |
 | `core/` | 纯领域内核：品种注册表 `instruments`、手续费 `fees`、保证金 `margin`、持仓 lot `lots`、日内账本 `ledger`、盈亏 `pnl`、指标 `metrics`、规则 `rules`、状态机 `state_machine`、规则评估 `evaluation`、动作 `actions`、限制 `restrictions`、事前检查 `pretrade`、委托 `orders`、告警 `alerts`、公司层 `firm`、EOD `eod`、结算价 `settle_price`、结算 `settlement`、内核门面 `engine`（`EngineCore`）、`effects` |
@@ -61,7 +61,6 @@
 | `sim/bots/` | strategy-sim：五个演示账户的策略机器人，基于 `client/` SDK |
 | `client/` | 策略 SDK：`FutriskClient`（按账户找分片发 `order.*`、跟踪委托、订阅行情和回报） |
 | `backtest/` | 回测：配置、历史数据分层、日内路径合成、逐日回放 `replay`（同一个 `EngineCore` 和结算库）、实验方案、统计分析、HTML 报告 |
-| `bench/` | 性能基准（`futrisk bench`） |
 | `web_static/dist/` | 构建好的仪表盘，由 api-gateway 托管 |
 
 仓库其他目录：`web/`（Vue 3 仪表盘源码，见 [`web/README.md`](../web/README.md)）、`config/`（默认配置）、`data/hist/`（回测历史数据，来源见 `data/hist/SOURCES.md`）、`deploy/`（docker）、`packaging/`（PyInstaller）、`scripts/`（构建、录制、文档工具）、`tests/`、`docs/`。
@@ -71,7 +70,6 @@
 ```mermaid
 flowchart TB
     CLI["cli/ · main.py<br/>命令行"]
-    BENCH["bench/<br/>性能基准"]
     SVC["services/*<br/>6 个服务外壳"]
     SIM["sim/<br/>虚拟交易所、机器人"]
     BT["backtest/<br/>回测"]
@@ -84,9 +82,7 @@ flowchart TB
     FOUND["messages/ · common/<br/>消息契约、配置、时钟、日历"]
     CLI --> SVC
     CLI --> BT
-    CLI --> BENCH
     CLI --> MDA
-    BENCH --> SVC
     SVC --> RT
     SVC --> CORE
     SVC --> MDA
@@ -191,7 +187,7 @@ flowchart TB
 
 | 目录 | 内容 | 命令 |
 |---|---|---|
-| `tests/unit/<领域>/` | 单元和组件测试，按包划分：`core`、`engine`（`EngineCore`：验收、事前检查、状态机、EOD、公司层、性质测试）、`bus`、`db`、`runtime`、`md_gateway`、`marketdata`、`risk_engine`、`trade_gateway`、`clearing`、`api_gateway`、`supervisor`、`sim`、`bots`、`client`、`backtest`、`cli`、`bench` | `.venv\Scripts\python -m pytest tests/unit -m "not slow"`（约 1600 项，数分钟）；去掉 `-m "not slow"` 同时运行多进程等慢测试 |
+| `tests/unit/<领域>/` | 单元和组件测试，按包划分：`core`、`engine`（`EngineCore`：验收、事前检查、状态机、EOD、公司层、性质测试）、`bus`、`db`、`runtime`、`md_gateway`、`marketdata`、`risk_engine`、`trade_gateway`、`clearing`、`api_gateway`、`supervisor`、`sim`、`bots`、`client`、`backtest`、`cli` | `.venv\Scripts\python -m pytest tests/unit -m "not slow"`（约 1600 项，数分钟）；去掉 `-m "not slow"` 同时运行多进程等慢测试 |
 | `tests/golden/` | 清算黄金用例：多日手算案例（`CASES.md` 给出每一步的手算过程），逐分比对 | `.venv\Scripts\python -m pytest tests/golden` |
 | `tests/property/` | 清算性质测试（hypothesis，固定种子）：资金恒等式、逐日盯市累计 = 逐笔对冲累计、交易所公式 = 平仓 + 持仓等 | `.venv\Scripts\python -m pytest tests/property` |
 | `tests/e2e/` | 端到端验收：真实启动 8 个进程，依次验证熔断三级、熔断后开仓被拒平仓成交、kill risk-engine-1 后熔断保持且告警不重复、Feed A 中断补齐且无重复、EOD 结算和报表 | `.venv\Scripts\python -m pytest -m e2e tests/e2e -v`（约 8~10 分钟；默认跳过，也可设 `FUTRISK_E2E=1`） |
