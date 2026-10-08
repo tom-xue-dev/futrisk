@@ -157,6 +157,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_exe.ps1
 
 ## 文档
 
+题目原文（`task.md`）不随公开仓库发布；需求的整理和解读见 01 §1 与 09。
+
 | 文档 | 内容 |
 |---|---|
 | [docs/README.md](docs/README.md) | 文档规范与索引 |

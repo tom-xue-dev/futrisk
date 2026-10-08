@@ -205,7 +205,7 @@ task.md 的每条要求 → 覆盖它的测试 → 测试断言了什么。文�
 
 ### 7.1 Python 测试
 
-执行日期 2026-10-08，当前代码（md-gateway 精简、`marketdata` 包并入 md-gateway 之后，校验器修正后的代码即提交 `e488ea4`）上按目录分别运行（`pytest tests\<目录> -q --timeout 300`，含慢速用例），共 1673 例，全部通过，没有跳过。与 2026-09-26 的 1747 例相比少 74 例，全部在行情部分：当时 `unit/marketdata` 154 例加 `unit/md_gateway` 159 例，共 313 例；现在 `unit/md_gateway` 203 例加 `unit/cli` 中新浪录制命令与进程守护的 36 例，共 239 例（精简删除了已删除功能的测试，`marketdata` 的测试并入 md-gateway）。其余目录的用例数不变。
+执行日期 2026-10-08，当前代码（md-gateway 精简、`marketdata` 包并入 md-gateway 之后）上按目录分别运行（`pytest tests\<目录> -q --timeout 300`，含慢速用例），共 1673 例，全部通过，没有跳过。与 2026-09-26 的 1747 例相比少 74 例，全部在行情部分：当时 `unit/marketdata` 154 例加 `unit/md_gateway` 159 例，共 313 例；现在 `unit/md_gateway` 203 例加 `unit/cli` 中新浪录制命令与进程守护的 36 例，共 239 例（精简删除了已删除功能的测试，`marketdata` 的测试并入 md-gateway）。其余目录的用例数不变。
 
 同日的截图会话中发现并修正了 md-gateway 校验器的一个缺陷（§8 第 11 项），`unit/md_gateway` 新增 1 例，变为 204 例。修正后的代码在 §7.4 的覆盖率测量中把全部 1674 例又运行了一遍，全部通过；§6 的端到端验收也在修正后的代码上重跑（5 例全部通过，用时 357.1s）。
 
