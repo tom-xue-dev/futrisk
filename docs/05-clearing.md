@@ -3,15 +3,15 @@
 | 项 | 内容 |
 |---|---|
 | 文档编号 | FR-SDD-05 |
-| 版本 | v0.6（实现对齐） |
+| 版本 | v1.0 |
 | 状态 | 实现对齐 |
-| 日期 | 2026-09-25 |
+| 日期 | 2026-10-08 |
 | 适用范围 | 盘后清算：逐日盯市、手续费、保证金（含单向大边）、资金、结算价、对账检查、EOD saga、结算单与风控日报；以及 risk-engine 盘中预估与结算的关系 |
 | 对应标准 | GB/T 8567-2006 软件设计说明（SDD）的部分内容：清算计算的算法设计、数据来源、精度与验证 |
-| 代码对照 | `src/futrisk/core/` 下的 `settlement.py`（`settle_day`）、`fees.py`、`margin.py`、`lots.py`、`pnl.py`、`settle_price.py`、`ledger.py`、`instruments.py`、`_num.py`；`src/futrisk/services/clearing/` 下的 `saga.py`、`prices.py`、`digests.py`、`pushes.py`、`eodwarn.py`、`reports/` |
-| 关联文档 | [README](README.md)（规范）· [01 架构](01-architecture.md) · [02 通信协议](02-communication-protocol.md) · [03 数据库](03-database-schema.md) · [04 风控规则](04-risk-rules.md) |
+| 代码对照 | `src/futrisk/core/` 下的 `settlement.py`（`settle_day`）、`fees.py`、`margin.py`、`lots.py`、`pnl.py`、`settle_price.py`、`ledger.py`、`instruments.py`、`eod.py`、`_num.py`；`src/futrisk/services/clearing/` 下的 `saga.py`、`prices.py`、`digests.py`、`pushes.py`、`eodwarn.py`、`scheduler.py`、`confighist.py`、`commands.py`、`reports/`；结算价输入 `src/futrisk/services/md_gateway/settle.py` |
+| 关联文档 | [README](README.md)（规范）· [01 架构](01-architecture.md) · [02 通信协议](02-communication-protocol.md) · [03 数据库](03-database-schema.md) · [04 风控规则](04-risk-rules.md) · [08 部署](08-deployment.md) |
 
-> 本文是清算计算的完整说明，01 §8.15 只列要点。消息负载、命令、主题以 [02](02-communication-protocol.md) 为准，结算结果的表和列以 03 §4.4 为准，本文只引用。文中的数字都取自代码、配置或测试：手算示例（第 9 章）的每个数都能在 `tests/golden/CASES.md` 和 `tests/golden/test_clearing_golden.py` 中找到。
+> 本文是清算计算的完整说明，01 §8.15 只列要点。消息负载、命令、主题以 [02](02-communication-protocol.md) 为准，结算结果的表和列以 03 §4.4 为准，本文只引用。文中的数字都取自代码、配置或测试：手算示例（第 9 章）的每个数都能在 `tests/golden/CASES.md` 和 `tests/golden/test_clearing_golden.py` 中找到，v1.0 修订时又用 `settle_day`、`determine_settlement_price` 等代码函数逐一复算，全部一致。每个公式旁注明计算它的函数。
 
 ## 目录
 1. [范围与依据](#1-范围与依据)
@@ -46,7 +46,7 @@
 | 无成交时的当日结算价 | 上期所结算细则第三十八条：（一）闭市时有买卖双方报价的，取最优买价、最优卖价、上一交易日结算价三者居中者；（二）闭市前连续五分钟保持停板价格且只有单方报价的，取停板价；（三）其他情况按前面有成交的最近月份合约的涨跌幅推算 | 回退链 `MEDIAN` → `LIMIT` → `PRE_SETTLE`，第（三）项简化为昨结算（§6.5、第 13 章） |
 | 当日盈亏公式 | 上期所结算细则第三十九条：当日盈亏 = Σ[(卖出成交价 − 当日结算价) × 卖出量] + Σ[(当日结算价 − 买入成交价) × 买入量] + (上一交易日结算价 − 当日结算价) × (上一交易日卖出持仓量 − 上一交易日买入持仓量) | 第二道校验 `EXCH_FORMULA`（第 7 章） |
 | SHFE 单向大边 | 上期所结算细则第三十一条：同一客户在同一会员处的同品种期货合约双向持仓，可以单边收取交易保证金，期货合约进入最后交易日前第五个交易日闭市后除外 | 按保证金**金额**取大边；最后交易日前第 5 个交易日（L−5）的结算起双边收取（§5.2） |
-| CFFEX 当日结算价 | 《中国金融期货交易所结算细则》第四十三条：某一时段的成交量加权平均价；该时段无成交的逐个时段向前推；最后一笔成交距开盘不足一个时段的取全天均价；当日无成交的按基准合约推算，并受涨跌停约束。时段由合约规则规定：股指期货为最后一小时，国债期货收盘为 15:15 | `VWAP_LAST_HOUR`（IF 类 14:00–15:00、T 14:15–15:15）加回退链 `HOURLY` → `FULLDAY` → `BENCHMARK` → `PRE_SETTLE`（§6.3、§6.4） |
+| CFFEX 当日结算价 | 《中国金融期货交易所结算细则》第四十三条：某一时段的成交量加权平均价；该时段无成交的逐个时段向前推；最后一笔成交距开盘不足一个时段的取全天均价；当日无成交的按基准合约（当日有成交、离交割月最近的合约）推算，并受涨跌停约束。时段由合约规则规定：股指期货为最后一小时，国债期货收盘为 15:15 | `VWAP_LAST_HOUR`（IF 类 14:00–15:00、T 14:15–15:15）加回退链 `HOURLY` → `FULLDAY` → `BENCHMARK` → `PRE_SETTLE`（§6.3、§6.4） |
 | CFFEX 单向大边 | 中金所结算细则第三十八条：同一客户号在同一会员处的同品种、跨品种双向持仓，可以按单边较大者收取（实物交割合约在交割月份前一个交易日收盘后除外），跨品种的品种由交易所公告 | 股指组、国债组；国债在交割月前一个交易日收盘后退出（§5.3） |
 | CFFEX 平今手续费 | 中金所"先平当日新开仓"的平今判定（`tests/golden/CASES.md` 中的 CFFEX FAQ 用例） | `close_today_fee_rule: SAME_DAY_OPENS_FIRST`（§4.4） |
 | DCE 日内开平与保证金 | 大商所的手续费标准（部分品种对当日开平的两条腿收取日内费率，`products.yaml` 中的 j 按 0.00014 配置）；大商所的双向持仓优惠通过套利交易保证金实现（《大连商品交易所套利交易管理办法》：结算时对同一交易编码下的持仓按先跨期、后跨品种、由近到远的顺序组合） | `close_today_fee_rule: INTRADAY_BOTH_LEGS`（§4.5）；保证金不做组合，按双边收取（§5.4） |
@@ -58,14 +58,14 @@
 
 | 内容 | 来源 |
 |---|---|
-| 交易所规则、品种参数、费率、保证金率、涨跌停、交易时段 | `config/products.yaml`（pydantic 模型 `src/futrisk/common/config/products.py`） |
-| 逐日盯市、资金、检查、下一日 SOD | `src/futrisk/core/settlement.py` |
-| 持仓与 lot、开平规则 | `src/futrisk/core/lots.py` |
+| 交易所规则、品种参数、费率、保证金率、涨跌停、交易时段 | `config/products.yaml`（pydantic 模型 `src/futrisk/common/config/products.py`），由 `src/futrisk/core/instruments.py` 的 `InstrumentRegistry` 按交易日解析 |
+| 逐日盯市、资金、检查、下一日 SOD | `src/futrisk/core/settlement.py`（`settle_day`） |
+| 持仓与 lot、开平规则 | `src/futrisk/core/lots.py`（`Position`、`PositionBook`） |
 | 盈亏公式、交易所公式 | `src/futrisk/core/pnl.py` |
-| 手续费分类与计算 | `src/futrisk/core/fees.py` |
+| 手续费分类与计算 | `src/futrisk/core/fees.py`（`DayFeeClassifier`、`DayFeeBook`、`compute_fee`） |
 | 保证金与单向大边 | `src/futrisk/core/margin.py`、`src/futrisk/core/instruments.py` |
-| 结算价 | `src/futrisk/core/settle_price.py`（算法）、`src/futrisk/services/clearing/prices.py`（取价）、`src/futrisk/services/md_gateway/settle.py`（结算价输入） |
-| EOD saga | `src/futrisk/services/clearing/saga.py`、`digests.py`、`pushes.py`、`eodwarn.py`、`scheduler.py` |
+| 结算价 | `src/futrisk/core/settle_price.py`（算法 `determine_settlement_price`）、`src/futrisk/services/clearing/prices.py`（取价与基准合约 `decide_prices`）、`src/futrisk/services/md_gateway/settle.py`（结算价输入 `compute_settle_input`） |
+| EOD saga | `src/futrisk/services/clearing/saga.py`、`digests.py`、`pushes.py`、`eodwarn.py`、`scheduler.py`、`confighist.py` |
 | 手算用例与测试 | `tests/golden/CASES.md`、`tests/golden/test_clearing_golden.py`；`tests/unit/core/`（`test_core_fees.py`、`test_core_margin.py`、`test_core_settle_price.py`、`test_core_settlement.py`） |
 
 ---
@@ -88,22 +88,22 @@
 ## 3. 逐日盯市与资金
 
 ### 3.1 持仓模型：lot 与盯市基准
-- 持仓按 `(账户, 合约, 方向)` 组织，每个持仓下挂按 FIFO 排序的 lot（开仓交易日、开仓时间、lot 编号），每个 lot 记录开仓价 `open_price` 和盯市基准 `basis_price`，列定义见 03 §4.4 的 `sod_lots`。
-- 今仓的盯市基准是开仓价；换日时每个 lot 都变为昨仓，基准改为当日结算价。所以平仓盈亏和持仓盈亏都可以写成"价格 − lot 基准"。
+- 持仓按 `(账户, 合约, 方向)` 组织（`lots.Position`），每个持仓下挂按 FIFO 排序的 lot（开仓交易日、开仓时间、lot 编号），每个 lot 记录开仓价 `open_price` 和盯市基准 `basis_price`，列定义见 03 §4.4 的 `sod_lots`。
+- 今仓的盯市基准是开仓价；换日时每个 lot 都变为昨仓，基准改为当日结算价（`PositionBook.roll`）。所以平仓盈亏和持仓盈亏都可以写成"价格 − lot 基准"。
 - 持仓只由成交改变（事件溯源，01 §8.1）。
 
 ### 3.2 平仓盈亏
 
-| 平掉的 lot | 平仓盈亏 |
+| 平掉的 lot | 平仓盈亏（`pnl.mtm_close_pnl`） |
 |---|---|
 | 今仓（平今） | (平仓价 − 开仓价) × m × q × s |
 | 昨仓（平昨） | (平仓价 − P) × m × q × s |
 
-一笔平仓可能消耗多个 lot，每个 lot 一条平仓明细（`close_details` 表），同时给出逐笔对冲口径的平仓盈亏 (平仓价 − 开仓价) × m × q × s。消耗哪些 lot 由交易所规则决定（第 4 章）。
+一笔平仓可能消耗多个 lot，每个 lot 一条平仓明细（`close_details` 表），同时给出逐笔对冲口径的平仓盈亏 (平仓价 − 开仓价) × m × q × s（`pnl.fifo_close_pnl`）。消耗哪些 lot 由交易所规则决定（第 4 章）。
 
 ### 3.3 持仓盯市盈亏
 
-| 剩余的 lot | 持仓盯市盈亏 |
+| 剩余的 lot | 持仓盯市盈亏（`pnl.position_pnl`） |
 |---|---|
 | 今仓 | (S − 开仓价) × m × q × s |
 | 昨仓 | (S − P) × m × q × s |
@@ -117,19 +117,20 @@
 当日盈亏   = 客户权益 − 静态权益 = 平仓盈亏 + 持仓盯市盈亏 − 手续费
 ```
 
+- 计算在 `settlement._settle` 的第 7 步：账户的平仓盈亏和持仓盯市盈亏按持仓（合约 × 方向）逐项取整到分后相加；手续费按笔取整后相加（第 11 章）。
 - 本系统没有期权、质押和其他费用，客户权益等于期末结存。
-- 账户的平仓盈亏和持仓盯市盈亏按持仓（合约 × 方向）逐项取整到分后相加；手续费按笔取整后相加（第 11 章）。
-- 出入金必须为正数、精确到分，否则结算失败（`SettlementError`，EOD 失败而不是产出错误的数字）。一笔出入金记入哪个交易日由 risk-engine 按自身的 EOD 状态判定：冻结之前记入当日，冻结之后、换日之前记入下一交易日，换日之后记入新的当前交易日（01 §8.15、02 §6.3）。
+- 出入金必须为正数、精确到分，否则结算失败（`SettlementError`，EOD 失败而不是产出错误的数字）。一笔出入金记入哪个交易日由 risk-engine 按自身的 EOD 状态判定（`core/eod.py` 的 `cash_trading_day`）：冻结之前记入当日，冻结之后、换日之前记入下一交易日，换日之后（含临时快照）记入新的当前交易日（01 §8.15、02 §6.3）。
 
 ### 3.5 保证金（公司保证金率）
 
 ```text
-合约全额保证金 = S × m × q × 公司保证金率          （每个合约先取整到分）
+合约全额保证金 = S × m × q × 公司保证金率          （每个合约每个方向先取整到分）
 公司保证金率   = 交易所保证金率 + 经纪商加收
 账户保证金     = Σ 各保证金组的收取额              （单向大边见第 5 章）
 ```
 
-- **生效中的费率**：费率表分两层，按合约列出的一层和适用于全部合约（`contracts: "*"`）的一层；每层取 `effective_from` ≤ 当日的最新一条；两层都有时取公司费率**较高**的一条，相等时取合约专属的一条。交易所按适用的最高标准收取：节前对全部合约统一上调时，原来有专属费率的合约也按两者中较高的一个收取。
+- 计算函数：`margin.settlement_margin`（结算，Decimal）；公司保证金率由 `InstrumentRegistry.margin_rate` / `margin_schedule` 按交易日取。
+- **生效中的费率**：费率表分两层，按合约列出的一层和适用于全部合约（`contracts: "*"`）的一层；每层取 `effective_from` ≤ 当日的最新一条；两层都有时取公司费率**较高**的一条，相等时取合约专属的一条。交易所按适用的最高标准收取：节前对全部合约统一上调时，原来有专属费率的合约也按两者中较高的一个收取。所有层都还没有生效的条目时（例如更早的回测），取最早的一条。
 - 当前配置（`products.yaml`）：
 
 | 品种 | 公司保证金率（交易所 + 经纪商） | 生效日期 |
@@ -143,12 +144,14 @@
 | IF、IH、IC、IM | 12% + 0 | 20260101 |
 | T | 2% + 0 | 20260101 |
 
+i、m 的节前上调按配置自 20260930 起生效。大商所的通知是自 2026-09-29 结算时起调整为 10%，而交易日 TD 的结算按 `margin_rate(合约, TD)` 收取，所以 20260929 的结算仍按公司费率 9%、8% 收取，比期货公司的口径偏低；节后恢复原费率的条目也没有配置。这是配置数据的缺陷（08 §5.2）。
+
 ### 3.6 可用资金、风险度与追加保证金
 
-| 项 | 结算口径 | 盘中口径（[04 风控规则](04-risk-rules.md)） |
+| 项 | 结算口径（`settlement._settle`） | 盘中口径（[04 风控规则](04-risk-rules.md)） |
 |---|---|---|
 | 可用资金 | 客户权益 − 保证金 | 权益 − 保证金 − 冻结保证金 − 冻结手续费 |
-| 风险度 | 保证金 ÷ 客户权益，保留 8 位小数；权益 ≤ 0 而有保证金时封顶为 9999.99999999 | 保证金 ÷ 权益（float） |
+| 风险度 | 保证金 ÷ 客户权益，保留 8 位小数（`_num.ratio`）；权益 ≤ 0 而有保证金时封顶为 9999.99999999 | 保证金 ÷ 权益（float） |
 | 追加保证金 | max(0，保证金 − 客户权益)：风险度超过 100% 时为保证金与权益之差，否则为 0 | — |
 
 ### 3.7 业绩权益、单位净值与高水位
@@ -158,12 +161,13 @@
 业绩权益     = 客户权益 − 累计净入金
 单位净值     = 业绩权益 ÷ 初始资金
 高水位       = max(SOD 的高水位, 当日业绩权益)
-回撤         = (高水位 − 业绩权益) ÷ 高水位
+回撤         = (高水位 − 业绩权益) ÷ 高水位                （高水位 ≤ 0 时为 0）
 ```
 
+- 计算在 `settlement._settle` 的第 7、10 步；比率由 `_num.ratio` 量化到 1e-8。
 - 出入金不影响单位净值和回撤（`test_cash_movements_do_not_move_nav`）。
-- `account_settlements.max_drawdown`（03 §4.4 的列名）存的是**当前**距高水位的回撤，不是历史最大回撤（`test_drawdown_from_high_water_mark`）；SOD 只携带高水位，不携带历史最大值（见第 13 章）。
-- 首日建账（`settle.seed_sod`）：上日结存 = 高水位 = 初始资金，累计净入金为 0，快照版本为 0（02 §6.5）。
+- `account_settlements.max_drawdown`（03 §4.4 的列名）存的是**当前**距高水位的回撤，不是历史最大回撤（`test_drawdown_from_high_water_mark`）；SOD 只携带高水位，不携带历史最大值。文本结算单和日报把这一栏标为"距高水位回撤"（CSV 结算单为"当前回撤（距高水位）"）；日报另列"历史最大回撤"，取首个结算日以来各日这一列的最大值（只按日终值，不含盘中，`store.max_drawdowns`）。
+- 首日建账（`settle.seed_sod`，ADMIN，02 §6.5）：快照的各项由请求给出，一个交易日的第一个建账快照版本为 0。`futrisk demo` 按 `accounts.yaml` 生成的请求（`seed_request_body`）令上日结存 = 高水位 = 初始资金、累计净入金为 0，`initial_positions` 作为昨仓；核心的 `settlement.seed_sod` 按同样的口径生成空仓快照，供回测和测试使用。
 
 ### 3.8 下一交易日的 SOD
 结算的最后一步生成下一交易日的 SOD（03 §4.4 `sod_accounts` / `sod_lots` / `sod_prices`）：
@@ -178,13 +182,14 @@
 | `pre_settle` | 当日确定的全部结算价：包括所有持仓和成交的合约，以及 SOD 中其他合约按回退链（通常是 `PRE_SETTLE`）得到的价格，所以每个可交易合约的昨结算都能延续到下一日（§6.6） |
 
 ### 3.9 盘中预估与结算的关系
-risk-engine 的盘中账本（`IntradayLedger`）复用同一套持仓（`PositionBook`）、计费（`DayFeeBook`）和单向大边规则（`group_charge`），只是用最新价代替结算价、用 float 代替 Decimal。所以标记价等于结算价时，盘中数字与结算结果一致，差异只来自：
+risk-engine 的盘中账本（`IntradayLedger`）复用同一套持仓（`PositionBook`）、计费（`DayFeeBook`）和单向大边规则（`margin.group_charge`），只是用最新价代替结算价、用 float 代替 Decimal。所以标记价等于结算价时，盘中数字与结算结果一致，差异只来自：
 
 | 差异来源 | 说明 |
 |---|---|
 | 价格 | 盘中按最新价（封板时按涨跌停价），结算按结算价 |
-| 浮点 | 盘中 float64，结算 Decimal；手续费的 float 取整与 Decimal ROUND_HALF_UP 一致（`round_cents`） |
+| 浮点 | 盘中 float64，结算 Decimal；手续费的 float 取整与 Decimal ROUND_HALF_UP 一致（`fees.round_cents`） |
 | DCE 日内费率 | 盘中开仓先按开仓费率预估，被当日平仓配对时在平仓成交上补记差额；按比率收费的品种可能有逐笔取整的差异（§4.5） |
+| 单向大边退出 | 退出在 L−5 的收盘结算时生效，L−5 当日盘中仍按大边（§5.2） |
 
 EOD 第 5 步的 `INTRADAY_VS_SETTLE` 检查核对两者之差是否在"价格差 × 持仓"的解释范围内（§8.1）。
 
@@ -194,7 +199,7 @@ EOD 第 5 步的 `INTRADAY_VS_SETTLE` 检查核对两者之差是否在"价格�
 
 ### 4.1 手续费模型
 
-| 费用腿（`FeeType`） | 费率 |
+| 费用腿（`FeeType`） | 费率（`fees.leg_rate`） |
 |---|---|
 | `OPEN` | `open` |
 | `CLOSE_YD` | `close_yd` |
@@ -202,13 +207,13 @@ EOD 第 5 步的 `INTRADAY_VS_SETTLE` 检查核对两者之差是否在"价格�
 | `INTRADAY_OPEN` / `INTRADAY_CLOSE` | `intraday`（DCE 当日开平两腿） |
 
 ```text
-type: rate     一条腿的手续费 = 成交价 × m × q × 费率
+type: rate     一条腿的手续费 = 成交价 × m × q × 费率          （fees.leg_amount）
 type: per_lot  一条腿的手续费 = q × 每手金额
-一笔成交的手续费 = Σ 各腿（不取整）→ ROUND_HALF_UP 到 0.01      （逐笔取整）
+一笔成交的手续费 = Σ 各腿（不取整）→ ROUND_HALF_UP 到 0.01      （fees.compute_fee，逐笔取整）
 ```
 
 - 一笔成交可以有两类腿，例如 CFFEX 平 10 手其中 8 手平今：8 手 `CLOSE_TODAY` + 2 手 `CLOSE_YD`。`trade_settlements.fee_type` 取"特殊"的那一类，优先级为 `INTRADAY_CLOSE` > `CLOSE_TODAY` > `INTRADAY_OPEN` > `CLOSE_YD` > `OPEN`。
-- 费率表的匹配顺序：按合约列出（`contracts`）> 按月份列出（`months`）> 其他（`months: other` 或不写）；同一层内取 `effective_from` ≤ 当日的最新一条；当日还没有任何一条生效时（例如更早的回测），取最早的一条。
+- 费率表的匹配顺序（`InstrumentRegistry.fee_schedule`）：按合约列出（`contracts`）> 按月份列出（`months`）> 其他（`months: other` 或不写）；同一层内取 `effective_from` ≤ 当日的最新一条；当日还没有任何一条生效时（例如更早的回测），取最早的一条。
 - 当前配置的费率（`products.yaml`）：
 
 | 品种 | 类型 | 开仓 / 平昨 | 平今倍数 | 日内 |
@@ -228,19 +233,19 @@ type: per_lot  一条腿的手续费 = q × 每手金额
 
 | 交易所 | 平仓必须区分今昨（`explicit_close_today`） | lot 消耗顺序（`close_style`） | 平今判定（`close_today_fee_rule`） |
 |---|---|---|---|
-| SHFE（INE 同） | 是 | 在允许的范围内先开先平 | `close_today_fee_rule: LOT_MATCH`：按实际消耗的 lot 判定 |
+| SHFE | 是 | `close_style: FIFO`，在允许的范围内先开先平 | `close_today_fee_rule: LOT_MATCH`：按实际消耗的 lot 判定 |
 | CFFEX | 否 | `close_style: TODAY_FIRST`：先平今仓 | `close_today_fee_rule: SAME_DAY_OPENS_FIRST`：先平当日新开仓 |
 | DCE | 否 | `close_style: FIFO`：先开先平（昨仓在前） | `close_today_fee_rule: INTRADAY_BOTH_LEGS`：实际平掉的今仓按日内费率，两条腿都算 |
 
-lot 的消耗顺序（对应 CTP 的 CloseStyle）只影响平仓盈亏与持仓盈亏的拆分，不影响当日盈亏总额（§9.2 用 FIFO 和先平今各算一遍，总额都是 23,160）；计费规则单独配置，两者分开。
+lot 的消耗顺序（对应 CTP 的 CloseStyle，`Position.close`）只影响平仓盈亏与持仓盈亏的拆分，不影响当日盈亏总额（§9.2 用 FIFO 和先平今各算一遍，总额都是 23,160）；计费规则（`DayFeeClassifier`）单独配置，两者分开。
 
 ### 4.3 SHFE：显式平今、平昨
-- 平仓委托必须指定 `CLOSE_TODAY` 或 `CLOSE_YESTERDAY`：`CLOSE_TODAY` 只消耗今仓，`CLOSE_YESTERDAY` 只消耗昨仓；普通的 `CLOSE` 按 CTP 语义归一为平昨（02 §7.3 `Offset`）。数量超过对应的可平量时，事前检查拒单（`REJECT_CLOSE_TODAY_EXCEEDS` / `REJECT_CLOSE_YD_EXCEEDS`），结算侧同样拒绝入账（`test_close_today_6_on_t2_rejected`）。
+- 平仓委托必须指定 `CLOSE_TODAY` 或 `CLOSE_YESTERDAY`：`CLOSE_TODAY` 只消耗今仓，`CLOSE_YESTERDAY` 只消耗昨仓；普通的 `CLOSE` 按 CTP 语义归一为平昨（02 §7.3 `Offset`，`lots.normalize_offset`）。数量超过对应的可平量时，事前检查拒单（`REJECT_CLOSE_TODAY_EXCEEDS` / `REJECT_CLOSE_YD_EXCEEDS`），结算侧同样拒绝入账（`test_close_today_6_on_t2_rejected`）。
 - 柜台强平（`FORCE_CLOSE`，只出现在成交回报中）按 `CLOSE` 处理；因为它是柜台已经执行的事实，昨仓不够时会继续消耗今仓，而不是被拒绝，平仓明细记录实际消耗的 lot 类型，手续费也按实际消耗的 lot 收取（`test_shfe_force_close_spills_into_today_lots`）。
 - 平今手续费 = 平昨费率 × 平今倍数：rb、hc 为 1 倍，cu 为 2 倍，au 平今免收。
 
 ### 4.4 CFFEX：先平当日新开仓
-- 一笔平仓按时间顺序与同一账户、同一持仓方向的**当日开仓**配对，配上的手数收平今手续费，其余收平昨手续费，**与实际消耗哪个 lot 无关**。持有昨仓时，只要当日先开后平，也按 10 倍费率收平今费。
+- 一笔平仓按时间顺序与同一账户、同一持仓方向的**当日开仓**配对，配上的手数收平今手续费，其余收平昨手续费，**与实际消耗哪个 lot 无关**（`DayFeeClassifier.close`）。持有昨仓时，只要当日先开后平，也按 10 倍费率收平今费。
 - `close_style: TODAY_FIRST` 让 lot 的消耗顺序与这条计费规则一致，所以平仓明细、`matched_today_qty` 与平今手续费的手数相同（`test_today_first_columns_agree`）；若改为 FIFO，当日总额不变，只是平仓盈亏和持仓盈亏的拆分不同（§9.2）。
 - 中金所 FAQ 的两个例子见 §9.3。
 
@@ -248,17 +253,17 @@ lot 的消耗顺序（对应 CTP 的 CloseStyle）只影响平仓盈亏与持仓
 - 平仓按先开先平消耗 lot，昨仓在前；只有**实际消耗的今仓**算日内，按 `intraday` 费率收取，并把与之配对的开仓腿（尚未被配对的最早的当日开仓）也改为日内费率。
 - 例：持有 2 手昨仓，买开 5 手、卖平 3 手：平仓先平 2 手昨仓，再平 1 手今仓，所以是 1 手日内平仓 + 1 手日内开仓、2 手平昨和 4 手普通开仓（§9.5）。
 - 没有配置 `intraday` 的品种（i、m），实际消耗的今仓按平今费率收取（平昨费率 × 平今倍数）。
-- 开仓腿的最终类别取决于之后的平仓，所以精确的手续费要等当日最后一笔成交之后才能确定：结算时全部成交分类完毕再逐笔计算；盘中先按开仓费率预估，被平仓配对时在平仓成交上补记差额，盘中累计值与 EOD 精确值相等（逐笔取整可能差几分钱，按手收费的品种完全相等，`test_rate_intraday_estimate_close_to_exact`、`test_per_lot_intraday_estimate_exact`）。
+- 开仓腿的最终类别取决于之后的平仓，所以精确的手续费要等当日最后一笔成交之后才能确定：结算时全部成交分类完毕再逐笔计算（`DayFeeBook.final_fee`）；盘中先按开仓费率预估，被平仓配对时在平仓成交上补记差额（`DayFeeBook.on_fill`），盘中累计值与 EOD 精确值相等（逐笔取整可能差几分钱，按手收费的品种完全相等，`test_rate_intraday_estimate_close_to_exact`、`test_per_lot_intraday_estimate_exact`）。
 
 ### 4.6 生效日期
-手续费、保证金率和涨跌停幅度都带生效日期（`effective_from`、`limit_schedule`），按交易日取值。例如 `products.yaml` 中 i、m 自 20260930 起保证金率上调、涨跌停幅度由 6% 放宽到 8%。clearing-worker 在每次运行开始时固定该交易日适用的配置版本（`step_log.BEGIN.config_version`），第 4、5 步只用这个版本，运行中提交的新配置不会改变正在进行的结算（`src/futrisk/services/clearing/confighist.py`）。
+手续费、保证金率和涨跌停幅度都带生效日期（`effective_from`、`limit_schedule`），按交易日取值。例如 `products.yaml` 中 i、m 自 20260930 起保证金率上调（生效日的缺陷见 §3.5）、涨跌停幅度由 6% 放宽到 8%。clearing-worker 在每次运行开始时固定该交易日适用的配置版本（`step_log.BEGIN.config_version`），第 4、5 步只用这个版本，运行中提交的新配置不会改变正在进行的结算（`src/futrisk/services/clearing/confighist.py`）。
 
 ---
 
 ## 5. 保证金与单向大边
 
 ### 5.1 算法
-合约按保证金组（`margin_groups.margin_group`，03 §4.4）归组，每组的收取额为：
+合约按保证金组（`margin_groups.margin_group`，03 §4.4；`InstrumentRegistry.margin_group`）归组，每组的收取额为（`margin.group_charge`）：
 
 ```text
 GROSS 组：    收取额 = 多头保证金 + 空头保证金
@@ -266,7 +271,7 @@ BIG_SIDE 组： 收取额 = max(多头保证金, 空头保证金) + 退出单向
 ```
 
 - 大边按**保证金金额**比较，不按手数（§9.4 的用例 3 专门验证这一点：多头 8 手按 10% 的金额大于空头 10 手按 7% 的金额）。
-- 已退出单向大边的合约双边收取，计入 `excluded_margin`。
+- 已退出单向大边的合约双边收取，计入 `excluded_margin`（`InstrumentRegistry.big_side_excluded`）。
 
 | 交易所 | 配置 | 保证金组 | 退出规则 |
 |---|---|---|---|
@@ -275,20 +280,20 @@ BIG_SIDE 组： 收取额 = max(多头保证金, 空头保证金) + 退出单向
 | DCE | `big_side: NONE` | `GROSS:{合约}` | — |
 
 ### 5.2 SHFE：同品种、按金额、L−5 退出
-- 最后交易日 L 前的第 5 个交易日记为 L−5。按"进入最后交易日前第五个交易日闭市后除外"，**L−5 当日的结算**起该合约双边收取，最后 5 个交易日（L−4 至 L）不参加单向大边。
+- 最后交易日 L 前的第 5 个交易日记为 L−5（`InstrumentRegistry.big_side_exit_day`，按交易日历计）。按"进入最后交易日前第五个交易日闭市后除外"，**L−5 当日的结算**起该合约双边收取，最后 5 个交易日（L−4 至 L）不参加单向大边。按配置的日历，rb2610（L = 20261015）的 L−5 为 20261008。
 - 盘中与结算的区别：退出在 L−5 的收盘结算时生效，所以 L−5 当日盘中仍然享受单向大边，从下一个交易日起盘中也双边收取（`test_exit_day_is_l_minus_5`、`test_intraday_exclusion_starts_the_day_after_exit`）。
 - 不同品种是不同的组（rb 与 hc 不互抵）。
 
 ### 5.3 CFFEX：同品种和跨品种
 - 股指期货 IF、IH、IC、IM 为一组，国债期货为一组，组内同品种和跨品种的双向持仓都按大边收取（§9.4 变体：IF 多 1 手与 IH 空 1 手）。
-- 实物交割的合约（国债，`physical_delivery: true`）在交割月份前一个交易日收盘后退出，双边收取；股指期货现金交割，永不退出（`test_index_futures_never_excluded`、`test_treasury_leaves_group_before_delivery_month`）。
+- 实物交割的合约（国债，`physical_delivery: true`）在交割月份前一个交易日收盘后退出，双边收取（T2612 为 20261130）；股指期货现金交割，永不退出（`test_index_futures_never_excluded`、`test_treasury_leaves_group_before_delivery_month`）。
 
 ### 5.4 DCE：不实现单向大边，以及理由
 - 大商所的双向持仓优惠是套利交易保证金：结算时按"先跨期、后跨品种、由近到远"的组合顺序把持仓配成组合，再对组合收取套利保证金。它与"按金额取大边"是不同的算法，需要实现组合规则和优先级，本期没有实现（TD-03：DCE 组合保证金）。
 - DCE 的持仓因此按双边全额收取（`GROSS:{合约}` 组）。这样保证金只会**高估**、不会低估：风险度和可用资金偏保守，符合失效即安全（01 §8.5）；与柜台的差异可以在对账中看到。
 
 ### 5.5 挂单冻结保证金
-- 挂着的开仓单冻结的保证金按**增量**计算：冻结额 = 收取额（持仓 + 全部挂单）− 收取额（仅持仓），每笔挂单按自己的价格估值。
+- 挂着的开仓单冻结的保证金按**增量**计算：冻结额 = 收取额（持仓 + 全部挂单）− 收取额（仅持仓），每笔挂单按自己的价格估值（`margin.frozen_margin`；盘中账本按保证金组缓存，`IntradayLedger.order_cost`）。
 - 所以在 SHFE，小边方向上的挂单只要不翻转大边，就不冻结保证金；翻转大边时只冻结超出的部分。这就是成交后交易所实际要收的钱（与 CTP 的单向大边冻结一致）。因为 max 是单调的，假设全部挂单成交是最坏情况（`test_small_side_order_freezes_nothing`、`test_flipping_the_big_side_freezes_the_excess`）。
 - 事前检查第 7 步按同样的增量规则估算本单需要的保证金（[04 风控规则](04-risk-rules.md)的事前检查一章）。
 
@@ -297,32 +302,32 @@ BIG_SIDE 组： 收取额 = max(多头保证金, 空头保证金) + 退出单向
 ## 6. 结算价
 
 ### 6.1 优先级
-每个合约按以下顺序确定结算价，前一项存在就不看后一项：
+每个合约按以下顺序确定结算价（`settle_price.determine_settlement_price`），前一项存在就不看后一项：
 
 | 优先级 | 来源（`SettlePriceSource`） | 说明 |
 |---|---|---|
-| 1 | `MANUAL` | `settle.override_price` 人工覆盖（RISK_MANAGER 或 ADMIN，记录操作者和原因）；必须在 tick 网格上，否则拒绝 |
-| 2 | `OFFICIAL` | `settle.import_official` 导入的官方结算价（ADMIN）；按原值使用，可以不在 tick 网格上（交割日的交割结算价可能不在网格上） |
+| 1 | `MANUAL` | `settle.override_price` 人工覆盖（RISK_MANAGER 或 ADMIN，理由必填，记录操作者和原因）；必须在 tick 网格上，否则拒绝 |
+| 2 | `OFFICIAL` | `settle.import_official` 导入的官方结算价（ADMIN）；导入时只校验合约存在、价格为正、不重复，按原值使用，可以不在 tick 网格上（交割日的交割结算价可能不在网格上）。价格 × 乘数 × 手数不是整分时会让恒等式检查误报 `FAIL`（§13） |
 | 3 | `VWAP` | 由 md-gateway 的结算价输入（`md.settle_inputs`，02 §7.1 `SettleInput`）计算，按交易所规则取整 |
 | 4 | `FALLBACK_*` | 该合约无成交时，按交易所配置的回退链（§6.5） |
 | 5 | `PRE_SETTLE` | 昨结算价，回退链的最后一环；配置的链里没写也会自动补上 |
 
-- 第 4 步（02 §8.4）先在价格锁之外取 `md.settle_inputs`，再在价格锁之内读取人工覆盖和官方价格、做出决定并提交，所以同一交易日的 `settle.override_price` / `settle.import_official` 不会与第 4 步交错。决定的价格固定在 `step_log` 中，重启后原样复用。
-- 人工覆盖在第 4 步之前提交，当次运行生效；之后提交需要用 `force_new_version` 重算一个新版本（02 §6.5）。已经结算之后导入的官方价格与所用价格不同时，产生一条 WARN（`detail.kind = OFFICIAL_PRICE_DIFF`，本文 §10.4），由人决定是否重算。
+- 第 4 步（02 §8.4）先在价格锁之外取 `md.settle_inputs`，再在价格锁之内读取人工覆盖和官方价格、做出决定并提交（`prices.decide_prices`），所以同一交易日的 `settle.override_price` / `settle.import_official` 不会与第 4 步交错。决定的价格固定在 `step_log` 中，重启后原样复用。
+- 人工覆盖和官方价格在运行到达 `PRICES_FIXED` 之前提交，当次运行生效；之后提交需要用 `force_new_version` 重算一个新版本（02 §6.5，`commands.target_version`）。已经结算之后导入的官方价格与所用价格不同时，产生一条 WARN（`detail.kind = OFFICIAL_PRICE_DIFF`，本文 §10.4），由人决定是否重算。
 
 ### 6.2 SHFE、DCE：全日 VWAP 与取整
 
 ```text
-VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一晚的夜盘）
+VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一晚的夜盘；settle_price.vwap）
 ```
 
-- **SHFE 向下取整到 tick**（`settle_rounding: FLOOR_TICK`）。证据：在官方数据样本（2026-09-18 至 2026-09-24）中，rb、hc、cu、au 有成交的 218 个合约日，结算价全部等于 VWAP 向下取整到 tick，四舍五入只能复现其中 114 个（`data/hist/SOURCES.md`）。例：rb 的 VWAP 3118.7 结算为 3118，四舍五入会得到 3119；au 的 VWAP 850.0933 结算为 850.08（tick 0.02），四舍五入会得到 850.10（§9.6）。
+- **SHFE 向下取整到 tick**（`settle_rounding: FLOOR_TICK`，`InstrumentRegistry.round_price`）。证据：在官方数据样本（2026-09-18 至 2026-09-24）中，rb、hc、cu、au 有成交的 218 个合约日，结算价全部等于 VWAP 向下取整到 tick，四舍五入只能复现其中 114 个（`data/hist/SOURCES.md`）。例：rb 的 VWAP 3118.7 结算为 3118，四舍五入会得到 3119；au 的 VWAP 850.0933… 结算为 850.08（tick 0.02），四舍五入会得到 850.10（§9.6）。
 - **DCE 四舍五入到 tick**（`settle_rounding: ROUND_TICK`），尚未用官方数据核实（RK-10）。导入官方结算价后以官方为准，差异会告警。
-- 盘后的结算价输入由 md-gateway 从规范 tick 计算（02 §7.1）。历史数据中新浪分钟线的成交量不完整，回测不用它估算 VWAP（`data/hist/SOURCES.md`）。
+- 盘后的结算价输入由 md-gateway 从规范 tick 计算（02 §7.1）。精简版的回测只读日线；历史数据中新浪分钟线的成交量不完整，不能用来估算 VWAP（`data/hist/SOURCES.md`）。
 
 ### 6.3 CFFEX：最后一小时 VWAP
 - 时段取品种的 `settle_window`：IF、IH、IC、IM 为 14:00–15:00，T 为 14:15–15:15（`settle_method: VWAP_LAST_HOUR`）。
-- md-gateway 从当日各状态的**累计**成交量和成交额计算（中途的缺口不影响结果）：时段内的量和额 = 时段内最后一个状态 − 时段开始前最后一个状态（边界状态）。以下情况把输入质量标为 `APPROX`（`src/futrisk/services/md_gateway/settle.py`）：
+- md-gateway 从当日各状态的**累计**成交量和成交额计算（中途的缺口不影响结果，`md_gateway/settle.py` `compute_settle_input`）：只用相互印证的状态（累计成交量随时间不减的最长子序列，前后矛盾的离群状态被丢弃），时间戳精确的状态优先：有这样的状态时，时间戳只精确到秒的状态（带 `FLAG_COARSE_TS`，即新浪的状态）不参与计算；时段内的量和额 = 时段结束（含其后 60s 内）前的最后一个状态 − 时段开始前的最后一个状态（边界状态）。以下情况把输入质量标为 `APPROX`：
   - 没有边界状态；
   - 边界状态距时段开始超过 500ms，且它与时段内第一个状态之间的成交量超过时段成交量的 0.2%（这部分成交的归属无法确定）；
   - 时段结束前 60s 内没有状态；
@@ -343,14 +348,14 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 | `BENCHMARK` | 当日无成交：昨结算 +（基准合约今结算 − 基准合约昨结算），夹在涨跌停价之间，再取整到 tick | `FALLBACK_BENCHMARK` |
 | `PRE_SETTLE` | 以上都不可用 | `PRE_SETTLE` |
 
-交易小时从收盘往前按交易分钟数划分，跨越午休（`trading_hour_windows`）：
+交易小时从收盘往前按交易分钟数划分，跨越午休（`settle_price.trading_hour_windows`）：
 
 | 品种 | 交易小时（从最后一小时往前） |
 |---|---|
 | IF、IH、IC、IM | [14:00,15:00)、[13:00,14:00)、[10:30,11:30)、[09:30,10:30) |
 | T | [14:15,15:15)、[13:15,14:15)、[10:45,11:30) 加 [13:00,13:15)（跨午休）、[09:45,10:45)、[09:30,09:45) |
 
-`SettleInput.hourly` 按交易小时再在首小时结束处切开（T 的 [09:45,10:45) 切成 [09:45,10:30) 和 [10:30,10:45)）分桶，所以逐小时回溯和首小时规则都是精确的；按钟点小时分桶只能近似（RK-04）。测试中的例子（`tests/unit/core/test_core_settle_price.py`）：
+`SettleInput.hourly` 按交易小时再在首小时结束处切开（T 的 [09:45,10:45) 切成 [09:45,10:30) 和 [10:30,10:45)）分桶（`trading_hour_segments`），所以逐小时回溯和首小时规则都是精确的；按钟点小时分桶只能近似（RK-04）。测试中的例子（`tests/unit/core/test_core_settle_price.py`，v1.0 复算一致）：
 
 | 用例 | 输入 | 结果 |
 |---|---|---|
@@ -361,7 +366,7 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 | 没有逐小时数据 | 10:10 4390、13:10 4401 | 全天 4395.5 → 4395.6（最近的 tick，逢半进位） |
 | 基准合约 | 昨结算 4400，基准合约 4410 → 4431.3 | 4400 + 21.3 = 4421.3 → 4421.4；基准涨到 6000 时封顶于涨停价 4840 |
 
-基准合约由 clearing-worker 选取：同品种中、本次运行里价格来自成交（`VWAP`、`OFFICIAL`、`MANUAL`）且**当日成交量最大**的合约（`prices.py` `_benchmark_for`）。中金所细则的定义是"当日有成交的离交割月最近的合约"，两者不同，见第 13 章。
+**基准合约**由 clearing-worker 选取（`prices._benchmark_for`）：在同品种、当日有成交（`SettleInput.day_volume` > 0）且本次运行已经定出价格的合约中（不含被定价的合约本身），取交割月最早的一个，与中金所细则"当日有成交的离交割月最近的合约"一致。推算加的是基准合约结算价相对其昨结算的**点数**变动，不是百分比；同品种当日都没有成交时跳过这一步，链条落到 `PRE_SETTLE`。例（v1.0 用 `decide_prices` 复算）：IF2610 当日成交 1 手、结算 4410（昨结算 4400），IF2612 成交 50 手、结算 4460（昨结算 4420），IF2703 无成交、昨结算 4450：IF2703 = 4450 + (4410 − 4400) = 4460（`FALLBACK_BENCHMARK`），用的是交割月最近的 IF2610，而不是成交量最大的 IF2612（那样会得到 4490）。
 
 ### 6.5 回退链汇总
 
@@ -370,18 +375,18 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 | SHFE、DCE | `MEDIAN`、`LIMIT`、`PRE_SETTLE` | `MEDIAN`：买一、卖一、昨结算三者居中（需要双边报价）→ `LIMIT`：收盘前 5 分钟一直封板（`limit_lock` 为 `UP` / `DOWN`）时取涨跌停价 → `PRE_SETTLE` |
 | CFFEX | `HOURLY`、`FULLDAY`、`BENCHMARK`、`PRE_SETTLE` | 见 §6.4 |
 
-封板判定由 md-gateway 给出：收盘前 5 分钟内的每个状态（以及它之前的最后一个状态）都锁在同一个涨跌停价上，对应上期所细则"闭市前连续五分钟报价保持停板价格"。回退的价格同样按交易所规则取整。
+封板判定由 md-gateway 给出：收盘前 5 分钟内的每个状态（以及它之前的最后一个状态）都锁在同一个涨跌停价上，对应上期所细则"闭市前连续五分钟报价保持停板价格"。`MEDIAN`、`HOURLY`、`FULLDAY`、`BENCHMARK` 的价格同样按交易所规则取整；`LIMIT` 取的涨跌停价本身已在 tick 网格上（§6.7），`PRE_SETTLE` 原样使用。
 
 ### 6.6 昨结算价的来源
 - **SOD 的值优先**：它是清算自己的结算结果，也是 SOD 中 lot 的盯市基准；md-gateway 给出的 `SettleInput.pre_settle` 只用于 SOD 中没有的合约。两者都有且不同时用 SOD 的值，并在 `PRICES_FIXED` 阶段记一条 WARN（`detail.kind = PRE_SETTLE_MISMATCH`）。同一个值也用于 `MEDIAN`、`LIMIT`、`BENCHMARK`，所以无成交、价格不变的一天，盈亏为 0。
 - **价格集合**覆盖：所有持仓或成交的合约（缺一个即 `FAILED`）；所有有 md 输入或人工、官方价格的合约；**SOD 中的全部合约**（按回退链定价，通常是 `PRE_SETTLE`），保证下一日的 SOD 为每个可交易合约延续昨结算价。
-- 当日首次交易、SOD 和 md-gateway 都不知道昨结算的新合约（例如 md-gateway 不可用时）：依次用同一交易日较早一次运行记录的 md 输入，或当日的人工、官方价格作为昨结算；仍然没有就结算失败，而不是悄悄用今天的价格（`test_previous_settlement_price_is_required`）。
+- 当日首次交易、SOD 和 md-gateway 都不知道昨结算的新合约（例如 md-gateway 不可用时）：依次用同一交易日较早一次运行记录的 md 输入，或当日的人工、官方价格作为昨结算（`prices.fallback_pre_settle`）；仍然没有就结算失败，而不是悄悄用今天的价格（`test_previous_settlement_price_is_required`）。
 
 ### 6.7 涨跌停价
 
 ```text
 涨停价 = 向下取整到 tick( P × (1 + 涨跌停幅度) )
-跌停价 = 向上取整到 tick( P × (1 − 涨跌停幅度) )        （都向价格区间内侧取整）
+跌停价 = 向上取整到 tick( P × (1 − 涨跌停幅度) )        （都向价格区间内侧取整；InstrumentRegistry.limit_prices）
 ```
 
 涨跌停幅度按交易日取 `limit_schedule`。例：rb 昨结算 3121、幅度 5%，3277.05 → 3277，2964.95 → 2965（§9.6）。
@@ -389,13 +394,13 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 ---
 
 ## 7. 第二道校验：交易所公式
-上期所结算细则第三十九条的当日盈亏公式只用成交价、成交量、今结算、昨结算和昨日持仓量，**与开平标志和 lot 的配对方式无关**：
+上期所结算细则第三十九条的当日盈亏公式只用成交价、成交量、今结算、昨结算和昨日持仓量，**与开平标志和 lot 的配对方式无关**（`pnl.exchange_formula_pnl`）：
 
 ```text
 当日盈亏 = [ Σ(卖出成交价 − S) × 卖出量 + Σ(S − 买入成交价) × 买入量 + (P − S) × (昨空 − 昨多) ] × m
 ```
 
-- 按账户 × 合约计算，必须**逐分**等于"平仓盈亏 + 持仓盯市盈亏"之和；不等则 `EXCH_FORMULA` 检查为 `FAIL`，EOD 不换日。
+- 按账户 × 合约计算，必须与"平仓盈亏 + 持仓盯市盈亏"之和**精确相等**（两边都是未取整的十进制值）；不等则 `EXCH_FORMULA` 检查为 `FAIL`，EOD 不换日。
 - 它能发现开平标志错误、lot 配对错误、昨仓基准错误等只影响拆分或基准的问题；黄金用例在每个交易日都用一个与核心无关的测试侧实现（`formula_oracle`）再核对一遍。
 - 例（用例 1 的 T2，P = 3120，S = 3132，昨多 12 手）：[(3140 − 3132) × 6 + (3135 − 3132) × 2 + (3132 − 3115) × 4 + (3120 − 3132) × (0 − 12)] × 10 = (48 + 6 + 68 + 144) × 10 = 2,660，等于平仓 1,600 + 持仓 1,060。
 
@@ -404,28 +409,30 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 ## 8. 对账检查
 
 ### 8.1 八项检查
-检查项为 02 §7.3 的 `ReconCheck`，结果写入 `recon_checks` 表（03 §4.4）。第 5 步的检查都把**已经生成的结果行重新读出来**独立求和，与汇总值比较，而不是比较同一个变量（`test_equity_identity_reads_the_emitted_rows`、`test_position_identity_reads_the_next_sod`、`test_firm_sum_reads_the_margin_rows`）。
+检查项为 02 §7.3 的 `ReconCheck`，结果写入 `recon_checks` 表（03 §4.4）。第 5 步的检查都把**已经生成的结果行重新读出来**独立求和，与汇总值比较，而不是比较同一个变量（`settlement._account_checks`、`_firm_check`；`test_equity_identity_reads_the_emitted_rows`、`test_position_identity_reads_the_next_sod`、`test_firm_sum_reads_the_margin_rows`）。
 
 | 检查 | 步骤 | 比较的内容 | 不一致时 |
 |---|---|---|---|
-| `TRADE_DIGEST` | 3 | 逐账户的成交摘要（笔数、手数合计、SHA-256）三方一致：clearing-worker 的本地副本、trade-gateway 的 `td.digest`、各分片 `EodFreezeAck.accounts` | 补拉后重新冻结，最多 3 次，仍不一致则 `FAILED`；冻结时仍有挂单记 `WARN` |
-| `CASH_DIGEST` | 3 | 逐账户的出入金笔数和**带符号的净额**（入金减出金）：本地副本与 `EodFreezeAck.cash` | 同上 |
+| `TRADE_DIGEST` | 3 | 逐账户的成交摘要（笔数、手数合计、SHA-256）**三方**一致：clearing-worker 的本地副本、trade-gateway 的 `td.digest`、各分片 `EodFreezeAck.accounts`（`digests.compare`） | 补拉后重新冻结，最多 3 次，仍不一致则 `FAILED`；冻结时仍有挂单记 `WARN` |
+| `CASH_DIGEST` | 3 | 逐账户的出入金笔数和**带符号的净额**（入金减出金），**两方**比较：本地副本与所属分片的 `EodFreezeAck.cash`。trade-gateway 不经手出入金，不参与；没有逐笔哈希 | 同上 |
 | `EQUITY_IDENTITY` | 5 | 期末结存 = 静态权益 + 平仓 + 持仓 − 手续费；当日盈亏 = 交易所公式 − 手续费；逐笔成交行的平仓盈亏之和 = 平仓明细之和 = 账户平仓盈亏；逐笔成交行的手续费之和 = 账户手续费 = 各持仓手续费之和；保证金组之和 = 账户保证金 | `FAIL`，不换日 |
 | `POSITION_IDENTITY` | 5 | 期初 + 开仓 − 平仓 = 期末 = 剩余 lot = 下一日 SOD 的 lot；平今 + 平昨 = 平仓；每笔平仓的明细覆盖全部手数 | `FAIL`，不换日 |
 | `EXCH_FORMULA` | 5 | 第 7 章 | `FAIL`，不换日 |
 | `MTM_VS_FIFO` | 5 | 平仓 + 持仓（盯市口径）= 逐笔已实现 + 逐笔浮动（期末）− 逐笔浮动（期初，按昨结算估值） | `FAIL`，不换日 |
-| `INTRADAY_VS_SETTLE` | 5 | 各分片的盘中权益与结算权益之差，是否在"Σ\|结算价 − 最新价\| × 手数 × m + \|盘中手续费 − 结算手续费\| + 1 元"的解释范围内 | 只记 `WARN` |
+| `INTRADAY_VS_SETTLE` | 5 | 各分片的盘中权益与结算权益之差，是否在"Σ\|结算价 − 最新价\| × 手数 × m + \|盘中手续费 − 结算手续费\| + 1 元"的解释范围内；有持仓找不到价格时也记 `WARN`（`saga.intraday_checks`） | 只记 `WARN` |
 | `FIRM_SUM` | 5 | 各账户权益之和 = 静态权益之和 + 交易所公式之和 − 逐笔手续费之和；保证金之和 = 保证金组之和；手续费之和 = 逐笔手续费之和；期末持仓手数之和 = 下一日 SOD 的 lot 手数之和 | `FAIL`，不换日 |
 
 `FAIL` 表示结算结果不可信：EOD 以 `FAILED` 结束，不推送新的 SOD，各分片保持冻结，下一个交易时段开始时自行进入临时日初快照（第 10 章）。`WARN` 允许继续。
 
+两个已知缺陷（08 §5.2）：`EQUITY_IDENTITY` 和 `FIRM_SUM` 把按持仓取整到分的盈亏，与**未取整**的交易所公式精确比较，结算价 × 乘数 × 手数不是整分时（实际上只会来自不在 tick 网格上的价格，例如导入的官方价，本文 §6.1）两项检查误报 `FAIL`，而 `detail` 按分取整后显示的差额往往是 0.00（v1.0 复算：rb 3 手、官方价 3118.3333 时两项都 `FAIL`、差额显示 0.00；3118.333 时 `PASS`）；出入金核对只比笔数和净额，金额互换之类相互抵消的差异核对不出。
+
 ### 8.2 三方成交摘要与出入金摘要
-- 成交摘要的算法见 02 §7.5，本地副本、trade-gateway 和 risk-engine 用同一个函数计算；某一方没有某个账户，按 0 笔计。
+- 成交摘要的算法见 02 §7.5，本地副本、trade-gateway 和 risk-engine 用同一个函数计算（`compute_account_digest`）；某一方没有某个账户，按 0 笔计。
 - 出入金摘要的净额按十进制比较（"100" 与 "100.00" 相等）；入金、出金都是正数，类型记反会破坏摘要（02 §7.7）。
 - 不一致时（02 §8.4 第 3 步）：先对本地副本与 trade-gateway 不一致的账户分页拉取 `td.query.trades`，对出入金不一致的账户向所属分片拉取 `risk.query.cash`，再重新 `eod.freeze` 取最新摘要，最多 3 次。
 
 ### 8.3 固定摘要与回退
-- 第 3 步核对通过时，把逐账户的成交和出入金摘要固定在 `step_log.TRADES_RECONCILED.digests` 中。
+- 第 3 步核对通过时，把逐账户的成交和出入金摘要固定在 `step_log.TRADES_RECONCILED.digests` 中（`digests.pin`）。
 - 第 5 步先用本地副本重新计算摘要，与固定的摘要比较；如果有账户不同（核对之后又到了成交或出入金），运行**回退到 `FROZEN`** 重新核对，这次回退计入 3 次的重新冻结额度。
 - `settle_day` 在进程池中运行期间如果又有成交写入本地副本，提交 `SETTLED` 的事务会发现副本的笔数变了，同样回退到 `FROZEN`。所以第 5 步结算的数据，一定是第 3 步核对过的数据。
 - `SETTLED` 之后才到达本地副本的成交或出入金不在本次结算中，记一条 WARN（`detail.kind = LATE_FACT`），由人决定是否用 `force_new_version` 重算。
@@ -433,7 +440,7 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 ---
 
 ## 9. 手算示例（黄金用例）
-来源：`tests/golden/CASES.md`（设计阶段用精确的十进制算术核对）和 `tests/golden/test_clearing_golden.py`（逐个断言这些数字，全部通过）。黄金用例用测试自带的品种参数（例如保证金 7%、没有经纪商加收），不是 `products.yaml` 的值；手续费按笔四舍五入到分（交易所自己的手续费取整方式尚未核实）。
+来源：`tests/golden/CASES.md`（设计阶段用精确的十进制算术核对）和 `tests/golden/test_clearing_golden.py`（逐个断言这些数字）；v1.0 修订时用 `settle_day`、`determine_settlement_price`、`build_settle_input`、`PositionBook.check_close` 和 `DayFeeBook` 重新算出了本章的全部数字，与下文一致。黄金用例用测试自带的品种参数（例如保证金 7%、没有经纪商加收），不是 `products.yaml` 的值；手续费按笔四舍五入到分（交易所自己的手续费取整方式尚未核实）。
 
 ### 9.1 用例 1：SHFE rb2701，三个交易日
 参数：乘数 10；开仓、平昨、平今手续费率都是 0.0001（平今倍数 1）；保证金 7%；期初结存 200,000 元；T1 的昨结算 3100。交易日 T1 = 20260922、T2 = 20260923、T3 = 20260924。
@@ -468,7 +475,7 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 ### 9.2 用例 2：CFFEX IF2612，含平今手续费陷阱
 参数：乘数 300；开仓、平昨费率 0.000023（0.23‱），平今费率 0.00023（2.3‱，10 倍）；保证金 12%；期初结存 1,000,000 元；D1 的昨结算 4380。交易日 D1 = 20260922、D2 = 20260923、D3 = 20260924。
 
-**结算价**：
+**结算价**（`build_settle_input` + `determine_settlement_price`）：
 - D1 的成交流水（含本账户的成交）：10:00 4400.0 × 2（本账户买开 2）；13:55 4380.0 × 50（在最后一小时之外）；14:05 4410.0 × 10；14:20 4415.0 × 20；14:30 4420.0 × 5（含本账户卖平 1）；14:45 4418.0 × 15；14:59:30 4412.0 × 10。最后一小时 [14:00,15:00) 的成交额为 4410 × 10 + 4415 × 20 + 4420 × 5 + 4418 × 15 + 4412 × 10 = 264,890（点 × 手），成交量 60 手，VWAP = 4414.833…，**S1 = 4414.8**。全日 VWAP 为 4399.02（112 手），选错时段的缺陷会被抓到。
 - D2 的最后一小时：14:10 4440.0 × 10、14:40 4444.0 × 10、14:55 4442.0 × 5，VWAP = 111,050 ÷ 25 = **4442.0**。
 - D3 的结算价直接给定为 4480.0（当日平仓后无持仓，它只影响公式中的昨仓项）。
@@ -507,8 +514,8 @@ VWAP = 当日成交额 ÷ (当日成交量 × m)          （全日，含上一�
 
 | 顺序 | 平今 / 平昨 | 手续费 |
 |---|---|---|
-| 先卖平 10 手，再买开 8 手 | 0 / 10：平仓时当日还没有开仓 | 平仓按平昨，开仓按开仓 |
-| 先买开 8 手，再卖平 10 手 | 8 / 2：先平当日新开的 8 手 | 8 × 4400 × 300 × 0.00023 + 2 × 4400 × 300 × 0.000023 = 2,428.80 + 60.72 = 2,489.52，`fee_type` 为 `CLOSE_TODAY` |
+| 先卖平 10 手，再买开 8 手 | 0 / 10：平仓时当日还没有开仓 | 平仓按平昨 10 × 4400 × 300 × 0.000023 = 303.60（`fee_type` 为 `CLOSE_YD`），开仓 8 × 4400 × 300 × 0.000023 = 242.88 |
+| 先买开 8 手，再卖平 10 手 | 8 / 2：先平当日新开的 8 手 | 平仓 8 × 4400 × 300 × 0.00023 + 2 × 4400 × 300 × 0.000023 = 2,428.80 + 60.72 = 2,489.52，`fee_type` 为 `CLOSE_TODAY`；开仓 242.88 |
 
 ### 9.4 用例 3：SHFE 双向持仓（单向大边）
 参数：rb2610 保证金 10%（合约专属，20260901 起），rb2701 为 7%（2026-09-24 的官方费率，不含经纪商加收）；手续费率 0.0001；期初结存 500,000 元；昨结算 rb2610 3050、rb2701 3110。rb2610 的最后交易日为 20261015，按含 10 月 1~7 日假期的交易日历，L−5 = 20261008。交易日 E1 = 20260930、E2 = 20261008。
@@ -578,7 +585,7 @@ sequenceDiagram
     CW-->>RE: sys.eod（FROZEN）
     CW->>TG: td.digest（td）
     TG-->>CW: TradeDigest
-    CW->>CW: 三方核对成交、核对出入金，不一致则补拉并重新冻结（最多 3 次），固定摘要
+    CW->>CW: 三方核对成交、两方核对出入金，不一致则补拉并重新冻结（最多 3 次），固定摘要
     CW-->>RE: sys.eod（TRADES_RECONCILED）
     CW->>MD: md.settle_inputs（td）
     MD-->>CW: SettleInput 列表
@@ -601,13 +608,13 @@ sequenceDiagram
 
 | 步骤 | 阶段（`EodPhase`） | 做什么 | 超时与失败 |
 |---|---|---|---|
-| 1 | `BEGIN` | 由调度器或 `settle.run` 创建运行行（`eod_runs` 表）；固定 SOD 版本、该交易日适用的配置版本和哈希；如果该日的有效版本已经换日，记录 `resettle_of`（§10.5） | 前置条件见 §10.6 |
-| 2 | `FROZEN` | 向每个分片发 `eod.freeze`，分片进入 `EOD_FROZEN`（新委托 `REJECT_EOD_IN_PROGRESS`），返回摘要 | 每次 30s，最多重试 3 次，仍失败则 `FAILED` |
-| 3 | `TRADES_RECONCILED` | `td.digest` 加三方核对（§8.2）；固定摘要；冻结时仍有挂单记 `WARN` | 补拉后重新冻结，最多 3 次，仍不一致则 `FAILED`，detail 列出差异 |
-| 4 | `PRICES_FIXED` | 在价格锁之外取 `md.settle_inputs`（md-gateway 先合并出规范 tick），再在价格锁内决定每个合约的结算价（第 6 章），固定价格和昨结算的来源 | md-gateway 不可用：如果每个持仓和成交的合约都有人工或官方价格就继续，否则 `FAILED`；有合约定不出价格时 `FAILED`，提示用 `settle.override_price` 或 `settle.import_official` 补价后重跑 |
-| 5 | `SETTLED` | 核对固定摘要（不同则回退到 `FROZEN`）；在进程池中运行 `settle_day`；加上 `INTRADAY_VS_SETTLE`；全部结果表、`recon_checks`、下一日 SOD、`eod_runs` 以及 `clearing.settled` 与 `sys.eod` 的 outbox 在**同一个事务**中提交 | 任何一项检查为 `FAIL`：`FAILED`，不换日；进程池的工作进程死亡时换新进程池重试一次 |
+| 1 | `BEGIN` | 由调度器或 `settle.run` 创建运行行（`eod_runs` 表，`EodSaga.decide_run_tx`）；固定 SOD 版本、该交易日适用的配置版本和哈希；如果该日的有效版本已经换日，记录 `resettle_of`（§10.5） | 前置条件见 §10.6 |
+| 2 | `FROZEN` | 向每个分片发 `eod.freeze`，分片进入 `EOD_FROZEN`（新委托 `REJECT_EOD_IN_PROGRESS`），返回摘要；换日之后的重新结算不冻结 | 每次 30s，最多重试 3 次，仍失败则 `FAILED` |
+| 3 | `TRADES_RECONCILED` | `td.digest` 加三方成交核对、两方出入金核对（§8.2）；固定摘要；冻结时仍有挂单记 `WARN` | 补拉后重新冻结，最多 3 次，仍不一致则 `FAILED`，detail 列出差异 |
+| 4 | `PRICES_FIXED` | 在价格锁之外取 `md.settle_inputs`（md-gateway 先把缓冲的原始 tick 写盘、合并出规范 tick），再在价格锁内决定每个合约的结算价（第 6 章），固定价格和昨结算的来源 | `md.settle_inputs` 每次 30s，最多重试 3 次；md-gateway 不可用：如果每个持仓和成交的合约都有人工或官方价格就继续，否则 `FAILED`；有合约定不出价格时 `FAILED`，提示用 `settle.override_price` 或 `settle.import_official` 补价后重跑 |
+| 5 | `SETTLED` | 核对固定摘要（不同则回退到 `FROZEN`）；在进程池中运行 `settle_day`；加上 `INTRADAY_VS_SETTLE`；全部结果表、`recon_checks`、下一日 SOD、`eod_runs` 以及 `clearing.settled` 与 `sys.eod` 的 outbox 在**同一个事务**中提交 | 任何一项检查为 `FAIL`：`FAILED`，不换日；进程池的工作进程死亡时重试一次 |
 | 6 | `ROLLED` | 向每个分片发 `eod.rollover`，分片按指定版本取 SOD（`settle.sod_snapshot`），换日后应答 `DayRoll`；全部分片确认后，`sod_versions.pushed_ns` 与 `ROLLED` 在同一个事务中写入 | 每次 30s，最多重试 3 次；没确认的分片保持冻结，心跳恢复时和每 30s 补推，直到确认；第一次失败记一条 WARN（`detail.kind = PUSH_INCOMPLETE`） |
-| 7 | `REPORTED` | 在进程池中生成日报和结算单（第 12 章），每个文件一条 `report.ready` | 失败只记 `WARN`，不影响换日，可以稍后补生成 |
+| 7 | `REPORTED` | 在进程池中生成日报和结算单（第 12 章），每个文件一条 `report.ready` | 失败不影响换日：错误记在 `REPORTED` 的 `errors` 中，不发 WARN 事件；运行 `DONE` 之后对该交易日再发 `settle.run` 会补生成 |
 | 8 | `DONE` | 发布 `sys.eod`（`DONE`），然后执行库维护（03 §8） | — |
 
 每一步的状态变化和对应的 `sys.eod` 在同一个事务中提交；clearing-worker 重启后从 `eod_runs.phase` 记录的最后一个已完成步骤继续。
@@ -619,7 +626,7 @@ sequenceDiagram
 |---|---|---|
 | `ROLL` | Y 晚于当前交易日，X 为当前交易日 | 已收盘交易日的 GFD、FAK、FOK 委托改为 `CANCELED`（原因 `SESSION_CLOSE`）并用 `route.resolve` 确认；风控状态换日（[04 风控规则](04-risk-rules.md)的"换日"一节）；安装新 SOD；应用冻结期间记入下一日的出入金和缓存的下一日成交，并向 trade-gateway 补拉新交易日的成交；把正式 SOD 的 lot 与自己的日终持仓比较，不一致时开一个不阻塞的 `POSITION_MISMATCH` 对账异常（`reason = SOD_VS_EOD`）；发布 `sys.dayroll` |
 | `REBASE` | Y 就是当前交易日，版本更新：建账更正、换日后重新结算、正式 SOD 替换临时 SOD | 替换 SOD，按顺序重放当日成交和出入金；风控状态和 episode 保持不变；来自临时 SOD 时回到 `OPEN`，并与临时快照的持仓比较 |
-| `PROVISIONAL` | 分片自己触发：下一交易日的第一个交易时段（含集合竞价）开始时，仍停在旧交易日 | 自行冻结旧交易日；向 md-gateway 取 `md.settle_inputs`；临时结算价 = VWAP（按交易所规则取整）> 当日最后一个标记价 > 结算价输入中的最新价 > 昨结算；用 `settle_day` 生成版本为 −1 的临时 SOD（今仓转昨仓，上日结存 = 自己算出的日终权益）；风控状态换日；全部账户禁开（`SYSTEM:EOD_NOT_SETTLED`），平仓照常 |
+| `PROVISIONAL` | 分片自己触发：下一交易日的第一个交易时段（含集合竞价）开始时，仍停在旧交易日 | 自行冻结旧交易日；向 md-gateway 取 `md.settle_inputs`；临时结算价 = VWAP（按交易所规则取整）> 当日最后一个标记价 > 结算价输入中的最新价 > 昨结算（`core/eod.py` 的 `provisional_prices`）；用 `settle_day` 生成版本为 −1 的临时 SOD（今仓转昨仓，上日结存 = 自己算出的日终权益）；风控状态换日；全部账户禁开（`SYSTEM:EOD_NOT_SETTLED`），平仓照常 |
 | `CATCH_UP` | Y 早于分片的当前交易日：分片因为漏掉的 EOD 已经在更晚的交易日上使用临时快照 | 只把 Y 的正式 SOD 记入本地的 `sod_*` 表，当前状态不变；同一 Y 的更新版本再次 `CATCH_UP`，旧版本拒绝 |
 
 - **连续性**：X 必须是分片链上最新的正式 SOD 所在的交易日，或者是一个已经结算过的 X → Y（重新结算），否则 `PRECONDITION_FAILED`（"settle {day} first"）。clearing-worker 也严格按交易日顺序结算和推送：前一个交易日还没有 `ROLLED`，后一个交易日就不开始。
@@ -632,7 +639,7 @@ sequenceDiagram
 |---|---|
 | 第 1~5 步中不可恢复的错误 | 运行以 `FAILED` 结束，`error` 记录原因，对账差异列在 detail 中；发布 `sys.eod`（`FAILED`），api-gateway 推送告警和 webhook（02 §9.8）；不换日 |
 | `FAILED` 之后 | 修正原因后用 `settle.run` 重跑，生成新的版本 |
-| `SETTLED` 之后 | 结算结果有效，运行**不再失败**：推送持续重试，报表失败只记 `WARN` |
+| `SETTLED` 之后 | 结算结果有效，运行**不再失败**：推送持续重试，报表失败只记在 `REPORTED` 的 `errors` 中 |
 | 分片一直没有确认换日 | 该分片保持 `EOD_FROZEN`；下一个交易时段开始时自行进入 `PROVISIONAL`（§10.3）；恢复后补推的正式 SOD 让它 `REBASE`（漏掉多日时先对更早的交易日 `CATCH_UP`） |
 | clearing-worker 重启 | 从最后完成的步骤继续；同一交易日有更新版本时，较旧的、尚未 `SETTLED` 的运行标为 `FAILED`（被取代） |
 | WARN 类事件 | 不改变运行的阶段，写入 `step_log.WARNINGS`，并以 `sys.eod` 事件发布：迟到的成交或出入金（`detail.kind = LATE_FACT`）、官方价格与所用价格不同（`detail.kind = OFFICIAL_PRICE_DIFF`）、推送未完成（`detail.kind = PUSH_INCOMPLETE`）；昨结算不一致（`detail.kind = PRE_SETTLE_MISMATCH`）随 `PRICES_FIXED` 发布。通知按 `detail.warn_id` 去重 |
@@ -640,10 +647,10 @@ sequenceDiagram
 ### 10.5 重新结算
 - 用 `settle.run` 带 `force_new_version` 生成一个更大的版本；某交易日的**有效结算结果**是 `phase` 为 `SETTLED`、`ROLLED`、`REPORTED` 或 `DONE` 的最大版本（02 §8.4）。
 - 该日的运行仍在进行时返回 `CONFLICT`；更晚的交易日已经结算时也返回 `CONFLICT`（不能改动已经被后续结算引用的一天）。
-- **换日之后重新结算**（有效版本已经 `ROLLED`，运行记录 `resettle_of`）：各分片已经在下一交易日交易，所以第 2 步**不再冻结**；第 3 步把本地副本与 trade-gateway 双向核对（不一致为 `FAIL`），再与被重算版本固定的摘要比较，差异（例如补进来的迟到成交）只记 `WARN`；第 6 步推送新的 SOD 版本，各分片执行 `REBASE`，风控状态机和 episode 保持不变，重新评估后出现的新越线按新的 episode 处理。
+- **换日之后重新结算**（有效版本已经 `ROLLED`，运行记录 `resettle_of`）：各分片已经在下一交易日交易，所以第 2 步**不再冻结**；第 3 步把本地副本与 trade-gateway 双向核对成交（不一致为 `FAIL`），再把成交和出入金与被重算版本固定的摘要比较，差异（例如补进来的迟到成交）只记 `WARN`（`digests.compare_resettle`）；第 6 步推送新的 SOD 版本，各分片执行 `REBASE`，风控状态机和 episode 保持不变，重新评估后出现的新越线按新的 episode 处理。
 
 ### 10.6 启动条件
-- **调度**：市场时间到达 `app.eod_start_at`（默认 "15:30"）时，调度器对系统当前所在的交易日（最新 SOD 的交易日）创建运行；已经有运行（进行中、`DONE` 或 `FAILED`）的不再创建，`FAILED` 需要人工处理。演示时钟的跳转与真实时间一样触发 EOD（02 §8.8）。
+- **调度**（`scheduler.EodScheduler`）：市场时间到达 `app.eod_start_at`（默认 "15:30"）时，调度器对系统当前所在的交易日（最新 SOD 的交易日）创建运行；已经有运行（进行中、`DONE` 或 `FAILED`）的不再创建，`FAILED` 需要人工处理。演示时钟的跳转与真实时间一样触发 EOD（02 §8.8）。
 - **前置条件**（`decide_run_tx`）：
 
 | 条件 | 不满足时 |
@@ -663,28 +670,28 @@ sequenceDiagram
 | 数值 | 类型与取整 |
 |---|---|
 | 运算上下文 | 十进制，34 位有效数字，ROUND_HALF_UP；在固定的上下文中运算，与调用方的全局设置无关（`_num.CLEARING_CTX`） |
-| 金额（结存、权益、盈亏、保证金、可用资金、追加保证金） | ROUND_HALF_UP 量化到 0.01 元（`DEC_MONEY`，03 §3.1） |
-| 手续费 | **逐笔取整**：一笔成交的各条腿不取整相加，再四舍五入到分 |
-| 保证金 | 每个合约的全额保证金先取整到分，再按保证金组汇总（取大边），所以持仓行的 `margin_gross` 能加总到组的值 |
-| 平仓盈亏、持仓盈亏 | 精确计算；账户汇总时按持仓逐项取整到分再相加 |
-| 比率（风险度、单位净值、回撤） | 精确相除后 ROUND_HALF_UP 量化到 1e-8（`DEC_RATE`）；分子为 0 时为 0；分母 ≤ 0 时封顶 ±9999.99999999（此时由追加保证金传递真实信号） |
+| 金额（结存、权益、盈亏、保证金、可用资金、追加保证金） | ROUND_HALF_UP 量化到 0.01 元（`DEC_MONEY`，03 §3.1；`decimals.q_money`） |
+| 手续费 | **逐笔取整**：一笔成交的各条腿不取整相加，再四舍五入到分（`fees.compute_fee`） |
+| 保证金 | 每个合约每个方向的全额保证金先取整到分，再按保证金组汇总（取大边），所以持仓行的 `margin_gross` 能加总到组的值 |
+| 平仓盈亏、持仓盈亏 | 精确计算；账户汇总时按持仓逐项取整到分再相加；交易所公式不取整（§8.1 的已知缺陷由此而来） |
+| 比率（风险度、单位净值、回撤） | 精确相除后 ROUND_HALF_UP 量化到 1e-8（`DEC_RATE`，`_num.ratio`）；分子为 0 时为 0；分母 ≤ 0 时封顶 ±9999.99999999（此时由追加保证金传递真实信号） |
 | 价格 | 规范的十进制字符串，不带末尾的 0（如 "4414.8"、"3120"）；VWAP 原值量化到 1e-6 记入 `vwap_raw` |
-| 消息中的价格 | 成交价在消息里是 float，入账时经 `str` 转为十进制，0.1 仍是 0.1（02 §4.3） |
-| 盘中预估 | float64；手续费的 float 取整与十进制 ROUND_HALF_UP 一致（15.525 在二进制中略小于 15.525，也会进位为 15.53） |
+| 消息中的价格 | 成交价在消息里是 float，入账时经 `str` 转为十进制（`decimals.D`），0.1 仍是 0.1（02 §4.3） |
+| 盘中预估 | float64；手续费的 float 取整（`fees.round_cents`）与十进制 ROUND_HALF_UP 一致：1.005 在二进制中略小于 1.005，直接按 float 四舍五入会得到 1.00，`round_cents` 加一个极小的偏移后得到 1.01 |
 
 ---
 
 ## 12. 结算单与风控日报
-报表文件的类型和路径见 03 §5.3：风控日报 `reports/{trading_day}/risk_daily.html`，结算单 `statement_{account_id}.txt` 和 `.csv`，完整的结算结果 `settlement.json`。结算产生新版本时覆盖同名文件，`reports` 表中新增一行。
+报表文件的类型和路径见 03 §5.3：风控日报 `reports/{trading_day}/risk_daily.html`，结算单 `statement_{account_id}.txt` 和 `.csv`，完整的结算结果 `settlement.json`（`reports/render.py`）。结算产生新版本时覆盖同名文件，`reports` 表中新增一行。
 
 ### 12.1 CTP 风格的结算单
 按 CTP 结算单的五个部分排列（`src/futrisk/services/clearing/reports/statement.py`）：
 
 | 部分 | 内容 |
 |---|---|
-| 资金状况 | 上日结存、当日存取合计、平仓盈亏、持仓盯市盈亏、手续费、当日结存；客户权益、保证金占用、可用资金、风险度、追加保证金；入金、出金、初始资金、单位净值、最大回撤（数值是当前距高水位的回撤，§3.7） |
+| 资金状况 | 上日结存、当日存取合计、平仓盈亏、持仓盯市盈亏、手续费、当日结存；客户权益、保证金占用、可用资金、风险度、追加保证金；入金、出金、初始资金、单位净值、距高水位回撤（`max_drawdown` 列的值，§3.7）；CSV 另有累计净入金 |
 | 成交记录 | 成交日期、交易所、品种、合约、买/卖、投/保、成交价、手数、成交额、开平、手续费、平仓盈亏、成交时间、成交编号 |
-| 平仓明细 | 每个被消耗的 lot 一行：开仓日期、手数、开仓价、盯市基准（平今为开仓价，平昨为昨结算）、成交价、平仓盈亏、逐笔平仓盈亏、类型（平今 / 平昨） |
+| 平仓明细 | 每个被消耗的 lot 一行：平仓日期、开仓日期、买/卖、手数、开仓价、盯市基准（平今为开仓价，平昨为昨结算）、成交价、平仓盈亏、逐笔平仓盈亏、类型（平今 / 平昨） |
 | 持仓明细 | 每个 lot 一行：开仓日期、持仓量、开仓价、昨结算、结算价、浮动盈亏（逐笔口径）、盯市盈亏、保证金（全额） |
 | 持仓汇总 | 每个合约一行：买持、买均价、卖持、卖均价、昨结算、今结算、持仓盯市盈亏、保证金占用（全额）；下方注明单向大边的实际收取额（保证金组、方法、收取额） |
 
@@ -692,24 +699,27 @@ sequenceDiagram
 - 文本结算单按显示宽度对齐（汉字算两个字符）；CSV 与文本结算单的部分相同，用 UTF-8 带 BOM 写出，表格软件可以直接打开。
 
 ### 12.2 风控日报
-自包含的 HTML（图片 base64 内嵌），可以打印成 PDF。章节与数据来源见 01 §5.3.4，依次为：表头（交易日含上一晚夜盘、配置哈希、各合约结算价的来源和输入质量）、摘要、资金表（CTP 口径）、盈亏与敞口、限额使用（日终值、盘中峰值、突破次数）、事件与动作、数据质量（数据源可用率为估算值）、系统运行、图表、压力测试（日终持仓在各板块 ±3%、±5% 冲击下的盈亏，以及全部板块同时冲击）。
+自包含的 HTML（图片 base64 内嵌），可以打印成 PDF。章节与数据来源见 01 §5.3.4，依次为（`reports/sections.py`）：表头（交易日含上一晚夜盘、配置版本与哈希、各合约结算价的来源、方法、未取整 VWAP 和输入质量）、摘要、资金表（CTP 口径，含距高水位回撤和历史最大回撤，本文 §3.7）、盈亏与敞口、限额使用（日终值、盘中峰值、突破次数）、事件与动作（含被拒委托）、数据质量（数据源可用率为估算值）、系统运行、图表、压力测试（日终持仓在各板块 ±3%、±5% 冲击下的盈亏，有多个板块时再加全部板块同时冲击）。
 
 ---
 
 ## 13. 已知简化与差异
+标为"缺陷"的各项已列入 08 §5.2 的已知缺陷表。
 
 | 项 | 交易所规则 | 本系统的实现 | 影响与应对 |
 |---|---|---|---|
 | SHFE 无成交结算价的第（三）项 | 按前面有成交的最近月份合约的涨跌幅推算，受涨跌停约束 | 回退到昨结算（`PRE_SETTLE`） | 只影响全天无成交、又没有双边报价和封板的远月合约；有官方价时以官方为准，也可以人工覆盖（RK-04） |
-| CFFEX 基准合约 | 当日有成交的离交割月最近的合约 | 同品种中价格来自成交、当日成交量最大的合约 | 两者通常是同一个合约，但近月临近到期、成交转向下一季月时会不同；应当改为按交割月选择 |
 | CFFEX 交易中断 | 扣除中断时间后向前取满相应时段 | 未实现 | 交易所系统故障属于极端情况，以官方价格为准 |
 | CFFEX 新上市合约 | 以挂盘基准价作为上一交易日结算价 | 取 md-gateway 给出的昨结算，或当日的人工、官方价格；都没有时结算失败 | 失败是显式的，不会产出错误数字 |
-| 交割 | 到期合约按交割结算价结算并进入交割 | 不实现交割流程（TD-03）；过了最后交易日的合约不能再下单（`REJECT_NOT_TRADABLE`） | 到期日的结算价以导入的官方价格为准；持仓应在最后交易日前了结 |
+| 交割 | 到期合约按交割结算价结算并进入交割 | 不实现交割流程（TD-03）；过了最后交易日的合约不能再下单（`REJECT_NOT_TRADABLE`） | 到期日的结算价以导入的官方价格为准；持仓应当在最后交易日前了结 |
 | DCE 保证金 | 套利和组合保证金优惠 | 双边全额收取 | 保证金只会高估（§5.4） |
 | DCE 结算价取整 | — | 四舍五入到 tick，尚未核实 | RK-10；导入官方价格后以官方为准 |
 | 手续费取整 | 交易所自己的取整方式未核实 | 逐笔四舍五入到分 | 与柜台可能相差分位 |
 | 报单申报费 | 按报撤单数量收取的费用 | 未实现（TD-03） | — |
-| `max_drawdown` 的含义 | — | 列名是"最大回撤"，实际存的是当前距高水位的回撤（§3.7）；结算单和日报资金表的"最大回撤"一栏展示的就是这个值 | 标签与含义不一致：应当改名为"回撤"，或者另行累计历史最大回撤 |
+| `max_drawdown` 的含义 | — | 列名是"最大回撤"，存的是当前距高水位的回撤（§3.7） | 结算单和日报已把这一栏标为"距高水位回撤"，日报另按日终值累计"历史最大回撤"；列名保留 |
+| 非整分官方价的恒等式误报（缺陷） | — | `settle.import_official` 不校验 tick 网格和小数位；结算价 × 乘数 × 手数不是整分时，`EQUITY_IDENTITY` 和 `FIRM_SUM` 拿取整到分的盈亏与未取整的交易所公式比较而 `FAIL`，detail 显示的差额往往是 0.00（§8.1） | EOD 以 `FAILED` 结束、不换日；用不超过整分精度的价格重新导入后 `settle.run` 重跑 |
+| 出入金只两方核对（缺陷） | — | `CASH_DIGEST` 只比本地副本与分片的笔数和净额，没有逐笔哈希（§8.1） | 相互抵消的差异（如两笔金额互换）核对不出；单笔差异照常发现 |
+| i、m 节前保证金生效日（缺陷） | 大商所通知：自 2026-09-29 结算时起保证金调整为 10%，节后恢复 | `products.yaml` 的保证金条目自 20260930 起生效，没有恢复条目（§3.5） | 20260929 的结算按旧费率收取；按公告手工维护 `products.yaml`（TD-04） |
 
 ---
 
@@ -731,3 +741,4 @@ sequenceDiagram
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | v0.6 | 2026-09-25 | 初版，按实现编写（实现对齐）：逐日盯市与资金公式、各交易所的开平与计费、单向大边（SHFE 按金额和 L−5 退出，CFFEX 跨品种与国债退出，DCE 不实现的理由）、结算价的优先级、取整与回退链、第二道校验、八项对账检查与固定摘要、黄金用例的逐数推导、EOD saga 的步骤与换日模式、数值精度、结算单与日报；规则出处对照上期所、中金所结算细则的条文核对。全部按代码描述，与 01 §8.15（v0.6 已按实现修订）一致；另外给出与交易所细则的差异（第 13 章），其中 CFFEX 基准合约的选法与细则不同。机械核对：`python scripts/check_docs.py` 0 个问题 |
+| v1.0 | 2026-10-08 | 文档重建，按当前代码逐条核对：1）更正 CFFEX 基准合约：代码按同品种当日有成交、交割月最早的合约选取（`prices._benchmark_for`），与中金所细则一致；删除"按成交量最大选取、与细则不同"的说法和第 13 章对应一行，并给出用 `decide_prices` 复算的例子（§6.4）；2）用 `settle_day`、`determine_settlement_price`、`build_settle_input`、`PositionBook`、`DayFeeBook` 复算第 6、7、9 章的全部数字，与原文一致；§9.3 补上第一种顺序的手续费；3）新增已知缺陷并指向 08 §5.2：非整分官方价使 `EQUITY_IDENTITY` / `FIRM_SUM` 误报 `FAIL`（复算证实）、出入金只两方核对、i、m 保证金生效日比大商所通知晚一天（本文 §3.5、§8.1、第 13 章）；4）结算价输入补充"只用相互印证的状态、精确时间戳优先"（§6.3）；5）`max_drawdown` 在结算单和日报中已标为"距高水位回撤"，日报另有"历史最大回撤"（§3.7、§12、第 13 章）；6）更正浮点取整例子（15.525 的二进制值略大于 15.525，改用 1.005，§11）；7）各公式注明计算函数，EOD 步骤补充 `md.settle_inputs` 的超时和重新结算不冻结；首日建账快照的取值以 `settle.seed_sod` 请求为准（演示按 `accounts.yaml` 生成）。机械核对：`python scripts/check_docs.py` 对本文报告 0 个问题。随后的独立交叉审查用自己的脚本（`settle_day`、`decide_prices` 等）复算了第 3~9、11 章的全部例子，与原文一致，更正 4 处：报表失败不发 WARN（§10.2、§10.4）、结算价输入中只精确到秒的新浪状态的处理（§6.3）、CSV 结算单的回撤标签（§3.7）、非整分价格的来源（§8.1） |
