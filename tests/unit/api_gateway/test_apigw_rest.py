@@ -578,7 +578,7 @@ class TestQueries:
 
     async def test_market_endpoints(self, h: Harness) -> None:
         from futrisk.messages.envelope import make_envelope
-        from futrisk.messages.md import BarsBatch, MdStatus, Tick
+        from futrisk.messages.md import MdStatus, Tick
 
         t = Tick(instrument_id="rb2701", exchange=Exchange.SHFE, trading_day="20260928", action_day="20260928",
                  exch_ts_ns=MONDAY_10AM, last=3100.0, volume=10, turnover=310_000.0, open_interest=5,
@@ -589,9 +589,6 @@ class TestQueries:
         assert [q["instrument_id"] for q in r.json()["data"]] == ["rb2701"]
         r = await call(h, "GET", "/market/quotes?instruments=cu2611", headers=hdr(Role.VIEWER))
         assert r.json()["data"] == []
-        h.bus.on("md.bars", lambda tg, p: ok_reply(BarsBatch(bars=[])))
-        r = await call(h, "GET", "/market/bars?instrument=rb2701", headers=hdr(Role.VIEWER))
-        assert r.status_code == 200 and h.bus.of("md.bars")[-1].payload.trading_day == "20260928"
         h.bus.on("md.sources", lambda tg, p: ok_reply(MdStatus(as_of_ns=1, trading_day="20260928", sources=[],
                                                                instruments=[])))
         r = await call(h, "GET", "/market/feeds", headers=hdr(Role.VIEWER))

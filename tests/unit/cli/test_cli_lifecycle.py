@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from futrisk.marketdata.lifecycle import (
+from futrisk.cli.lifecycle import (
     CTRL_BREAK_EVENT,
     CTRL_C_EVENT,
     CTRL_CLOSE_EVENT,
@@ -27,11 +27,6 @@ from futrisk.marketdata.lifecycle import (
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only API")
 
 
-# ---------------------------------------------------------------------------
-# Keep awake
-# ---------------------------------------------------------------------------
-
-
 class TestKeepAwake:
     @windows_only
     def test_request_is_set_and_cleared(self) -> None:
@@ -41,11 +36,6 @@ class TestKeepAwake:
     def test_disabled_is_a_no_op(self) -> None:
         with keep_awake(False) as active:
             assert active is False
-
-
-# ---------------------------------------------------------------------------
-# Single-instance lock
-# ---------------------------------------------------------------------------
 
 
 class TestInstanceLock:
@@ -71,25 +61,17 @@ class TestInstanceLock:
         lock.release()
 
 
-# ---------------------------------------------------------------------------
-# Console close / logoff / shutdown
-# ---------------------------------------------------------------------------
-
-
 class TestConsoleCloseGuard:
     @pytest.mark.parametrize("event", [CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT])
     def test_close_events_flush(self, event: int) -> None:
         flushed: list[bool] = []
         guard = ConsoleCloseGuard(lambda: flushed.append(True))
-        assert guard.handle(event) is True
-        assert flushed == [True] and guard.calls == [event]
+        assert guard.handle(event) is True and flushed == [True] and guard.calls == [event]
 
     @pytest.mark.parametrize("event", [CTRL_C_EVENT, CTRL_BREAK_EVENT])
     def test_ctrl_c_and_break_are_left_to_python(self, event: int) -> None:
         flushed: list[bool] = []
-        guard = ConsoleCloseGuard(lambda: flushed.append(True))
-        assert guard.handle(event) is False
-        assert flushed == []
+        assert ConsoleCloseGuard(lambda: flushed.append(True)).handle(event) is False and flushed == []
 
     def test_flush_errors_are_contained(self) -> None:
         def broken() -> None:
@@ -106,11 +88,6 @@ class TestConsoleCloseGuard:
         finally:
             guard.uninstall()
         guard.uninstall()
-
-
-# ---------------------------------------------------------------------------
-# Stop signals
-# ---------------------------------------------------------------------------
 
 
 class TestStopSignals:

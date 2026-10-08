@@ -27,15 +27,11 @@ export const MD_EVENT_KIND_VALUES = [
   'MD_RECOVERED',
   'MD_QUIET',
   'MD_INTEGRITY',
-  'MD_FLAPPING',
   'BAD_TICK',
-  'QUARANTINE_CONFIRMED',
-  'QUARANTINE_DROPPED',
 ] as const
 export type MdEventKind = (typeof MD_EVENT_KIND_VALUES)[number]
 
 export type GapStatus = 'OPEN' | 'FILLED' | 'UNRECOVERABLE'
-export type BarQuality = 'OK' | 'GAP_FILLED' | 'GAP_UNFILLED'
 export type LimitLock = 'NONE' | 'UP' | 'DOWN'
 export type SettleMethod = 'VWAP_FULL_DAY' | 'VWAP_LAST_HOUR'
 export type SettleInputQuality = 'OK' | 'APPROX' | 'NO_TRADE'
@@ -122,7 +118,7 @@ export type TradeOrigin = 'INTERNAL' | 'EXTERNAL'
 export type ReconResolution = 'RESYNCED' | 'RESEEDED' | 'ACCEPTED'
 export type ReconBreakKind = 'POSITION_MISMATCH' | 'REPLAY_EXPIRED' | 'ORDER_STATE_CONFLICT'
 export type ReconBreakStatus = 'OPEN' | 'RESOLVED'
-export type TickMode = 'LIVE' | 'BACKFILL' | 'QUARANTINED' | 'REJECTED' | 'DUPLICATE'
+export type TickMode = 'LIVE' | 'BACKFILL' | 'REJECTED' | 'DUPLICATE'
 
 export const EOD_PHASE_VALUES = [
   'BEGIN',

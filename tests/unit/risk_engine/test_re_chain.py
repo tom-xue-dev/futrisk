@@ -81,7 +81,7 @@ def chain_config(default_config: FullConfig) -> FullConfig:
 
 def md_params() -> MdParams:
     arb = ArbitrationConfig(probation_healthy_s=1.0, min_dwell_s=0.5, stale_s=0.6, unknown_s=2.0, open_grace_s=1.0)
-    return MdParams(arb=arb, startup_grace_s=5.0, raw_roll_s=1.0, record_handoff_s=0.1, bar_close_grace_s=1.0)
+    return MdParams(arb=arb, startup_grace_s=5.0, raw_roll_s=1.0, record_handoff_s=0.1)
 
 
 async def start_md(cfg: FullConfig, home: Path, offset: int, ex: SimExchange) -> tuple[AsyncServiceRuntime, MdGatewayService]:

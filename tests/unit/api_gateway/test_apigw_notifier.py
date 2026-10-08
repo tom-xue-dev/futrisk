@@ -409,7 +409,5 @@ def test_md_integrity_severity_follows_the_arbitration_action() -> None:
         return MdEvent(event_id=f"e-{action}", kind=MdEventKind.MD_INTEGRITY, ts_ns=1, trading_day="20260928",
                        instrument_id="rb2701", detail={"action": action} if action else {})
 
-    sev = {a: (n.severity if (n := build_notification(ev(a))) else None)
-           for a in (None, "VOTE", "WM_ROLLBACK", "HOLD", "RELEASE", "EVICT", "NO_VOTE")}
-    assert sev == {None: "HIGH", "VOTE": "HIGH", "WM_ROLLBACK": "HIGH", "HOLD": "WARNING",
-                   "RELEASE": None, "EVICT": None, "NO_VOTE": None}
+    sev = {a: (n.severity if (n := build_notification(ev(a))) else None) for a in (None, "VOTE", "NO_VOTE")}
+    assert sev == {None: "HIGH", "VOTE": "HIGH", "NO_VOTE": None}

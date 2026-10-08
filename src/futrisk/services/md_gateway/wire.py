@@ -1,11 +1,10 @@
-"""Typed Feed A wire messages (02 §9.1) for the decode fast path.
+"""Typed vendor messages (02 §9.1, §9.2) for the decode fast path.
 
-Frames are decoded straight into these :class:`msgspec.Struct` types (one tagged union
-on ``op``), which is several times faster than building dictionaries. Anything that
-does not fit the schema (an unknown ``op``, a field of the wrong type such as a
-``MALFORMED`` fault's ``"LastPrice": "N/A"``) makes the typed decode fail; the client
-then falls back to the generic ``dict`` path, where the normalizer reports the precise
-02 §11.3 reason.
+Feed A frames are decoded straight into one tagged union on ``op``, several times faster than
+building dictionaries; a frame that does not fit (an unknown ``op``, a field of the wrong type
+such as a ``MALFORMED`` fault's ``"LastPrice": "N/A"``) is handled by the generic ``dict`` path
+of the client. Feed B records are converted into :class:`VendorQuote` one by one (strings are
+coerced, ``strict=False``), so one malformed record only rejects itself.
 """
 
 from __future__ import annotations
@@ -39,6 +38,29 @@ class CtpTick(msgspec.Struct, frozen=True):
     PreClosePrice: float | None = None
     PreOpenInterest: float | None = None
     AveragePrice: float | None = None
+
+
+class VendorQuote(msgspec.Struct, frozen=True):
+    """One record of Feed B's ``GET /v1/quotes`` (02 §9.2); prices arrive as decimal strings."""
+
+    sym: str
+    t: int
+    px: float
+    vol: int
+    amt: float
+    oi: float
+    ex: str | None = None
+    bp: float | None = None
+    ap: float | None = None
+    bv: int = 0
+    av: int = 0
+    o: float | None = None
+    h: float | None = None
+    l: float | None = None  # noqa: E741 - vendor field name
+    up: float | None = None
+    dn: float | None = None
+    ps: float | None = None
+    pc: float | None = None
 
 
 class TickFrame(msgspec.Struct, tag="tick", tag_field="op"):
@@ -92,16 +114,7 @@ class ErrorFrame(msgspec.Struct, tag="error", tag_field="op"):
     head_seq: int | None = None
 
 
-Frame = (
-    TickFrame
-    | HeartbeatFrame
-    | WelcomeFrame
-    | SnapshotFrame
-    | ReplayBeginFrame
-    | ReplayEndFrame
-    | ResumeRejectedFrame
-    | ErrorFrame
-)
+Frame = TickFrame | HeartbeatFrame | WelcomeFrame | SnapshotFrame | ReplayBeginFrame | ReplayEndFrame | ResumeRejectedFrame | ErrorFrame
 
 decode_frame = msgspec.json.Decoder(Frame).decode
 
@@ -115,6 +128,7 @@ __all__ = [
     "ResumeRejectedFrame",
     "SnapshotFrame",
     "TickFrame",
+    "VendorQuote",
     "WelcomeFrame",
     "decode_frame",
 ]

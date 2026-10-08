@@ -1,27 +1,14 @@
 """Per-instrument market-data quality OK / STALE / UNKNOWN (01 §8.13 陈旧判定, §8.5, 02 §7.3 MdQuality).
 
-- **coverage** (H2): an instrument is covered only while its LIVE stream is *current*
-  (not held by an integrity conflict, and no connected source - trusted or not - has shown
-  a validated state with new information stamped more than ``stale_s`` after the
-  watermark) **and** at least one TRUSTED source is connected, timely (transport lag
-  within ``live_max_latency_ms``) and delivering it: Feed A only while it has no open
-  sequence gap older than ``stale_s``, a polled source only for records of its latest
-  successful poll that were actually accepted;
-- staleness is judged **only in continuous sessions at market time**, ``open_grace_s``
-  after each open, and timed with the monotonic clock: without coverage for ``stale_s``
-  the quality becomes STALE, after ``unknown_s`` UNKNOWN (``QUALITY_CHANGE`` events). When
-  the LIVE stream is behind the market by more than that (``lag_ns``, exchange time), the
-  uncovered time counts from there at once. Coverage restores OK at once (improvements
-  are never delayed);
-- ``MD_DOWN`` is raised **once per outage per instrument** when it first leaves OK (and
-  ``MD_RECOVERED`` when it is OK again); the open outage is reloaded from ``md_events``
-  after a restart, so a restart neither repeats nor loses it;
-- at start-up every instrument is UNKNOWN (nothing is known yet) without an event; the
-  sources need to connect and bootstrap, so outages are not announced during
-  ``startup_grace``; instruments never observed (no data, no persisted watermark) get no
-  events at all (their status stays UNKNOWN, which blocks opening in risk-engine);
-- ``quiet`` / ``MD_QUIET``: covered but no volume increase for ``stale_s`` (e.g. a limit
-  lock), at most one event per ``quiet_event_interval_s``.
+An instrument is *covered* while its LIVE stream is current and a TRUSTED source delivers it
+(the service decides; see ``MdGatewayService._covered``). Staleness is judged only in continuous
+sessions, ``open_grace_s`` after each open, with the monotonic clock: uncovered for ``stale_s``
+-> STALE, for ``unknown_s`` -> UNKNOWN (``QUALITY_CHANGE``); when the LIVE stream is behind the
+market by more (``lag_ns``, exchange time) the uncovered time counts from there at once; coverage
+restores OK immediately. ``MD_DOWN`` is raised once per outage per instrument when it first
+leaves OK (``MD_RECOVERED`` when OK again), reloaded from ``md_events`` after a restart; nothing
+is announced during the start-up grace or for instruments never observed (they stay UNKNOWN,
+which blocks opening in risk-engine). ``MD_QUIET``: covered but no trade for ``stale_s``.
 """
 
 from __future__ import annotations

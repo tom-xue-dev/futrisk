@@ -10,7 +10,7 @@ table, completed for the codes it lists as "other"); ``INTERNAL`` is the only
 code                                                            HTTP
 ==============================================================  ====
 ``OK``; business outcomes ``REJECT_*``, ``MD_REJECT_*``,         200
-``MD_QUARANTINE_*``, ``BROKER_*``, ``ROUTE_*`` (``ok=false``)
+``BROKER_*``, ``ROUTE_*`` (``ok=false``)
 ``BAD_REQUEST``                                                 400
 ``UNAUTHORIZED``                                                401
 ``FORBIDDEN``                                                   403
@@ -60,7 +60,7 @@ _STATUS: dict[str, int] = {
     codes.UNAVAILABLE: 503,
     codes.TIMEOUT: 504,
 }
-BUSINESS_PREFIXES = ("REJECT_", "MD_REJECT_", "MD_QUARANTINE_", "BROKER_", "ROUTE_")
+BUSINESS_PREFIXES = ("REJECT_", "MD_REJECT_", "BROKER_", "ROUTE_")
 RETRY_AFTER_STATUSES = (429, 503)
 
 _json_encoder = msgspec.json.Encoder()

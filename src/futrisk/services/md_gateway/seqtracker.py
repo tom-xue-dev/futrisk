@@ -1,42 +1,18 @@
 """Feed A sequence tracking: duplicates, reordering, holes, replays and resume (02 §9.1, 01 §6.4, §8.13).
 
-Feed A numbers every tick with one global ``seq`` per ``epoch``. :class:`SeqTracker`
-keeps three positions:
-
-- ``contiguous``: every seq ``<= contiguous`` was received (or given up as
-  unrecoverable). It is the resume point (``from_seq = contiguous + 1``) and, once the
-  matching raw shard is on disk, the persisted cursor (03 §4.1 ``feed_cursors``);
-- ``frontier``: the next live seq expected (``max delivered + 1``);
-- holes: declared missing ranges below ``frontier`` with their repair state.
-
-Rules:
-
-- a seq already received (``<= contiguous``, delivered above it, or held) is a duplicate
-  and dropped;
-- ``seq == frontier`` is delivered at once; a seq beyond it is held in the **reorder
-  buffer** (at most ``reorder_max`` messages or ``reorder_ns``); when the buffer
-  overflows or ages out, the still-missing seqs become a **hole**, the held ticks are
-  released in seq order (live data keeps flowing) and an in-connection ``replay`` is
-  requested for the hole;
-- replayed ticks (``replay=true``) and late ticks below ``frontier`` only fill holes;
-  they never move the live expectation (02 §9.1 连接内补洞) and are delivered with
-  ``replay=True`` so the arbiter classifies them as BACKFILL;
-- a heartbeat whose ``head_seq`` stays beyond everything received for
-  ``tail_heartbeats`` heartbeats in a row reveals a **tail gap**, repaired the same way;
-- on reconnect the client resumes from ``contiguous + 1``: the resume block becomes a
-  ``resume`` hole; ``SEQ_EVICTED`` gives up the evicted part (``GAP_UNRECOVERABLE``)
-  and replays what the ring still holds; ``EPOCH_CHANGED`` gives up the old epoch's
-  known tail and backfills the new epoch's ring; ``BAD_RESUME`` starts again from the
-  server's head (02 §9.1).
-
-Holes report ``filled`` (seqs received through the repair), ``duplicates`` (seqs of the
-range that had already arrived) and ``unrecoverable`` (seqs given up); the given-up seqs
-are also kept as ranges (:attr:`SeqTracker.lost`) so that gaps left open by a previous
-run can be settled one by one after the restart. The end of every resume (``replay_end``
-of the resume block, or ``resume_rejected``) is reported to the sink
-(:meth:`TrackerSink.resume_finished`). The tracker is transport-agnostic: the WebSocket
-client feeds it messages and implements :class:`TrackerSink`; it never blocks and reads
-time only from the injected clock.
+Feed A numbers every tick with one global ``seq`` per ``epoch``. The tracker keeps
+``contiguous`` (every seq up to it was received or given up: the resume point and, once the
+raw shard is on disk, the persisted cursor), ``frontier`` (the next live seq expected) and the
+**holes** (missing ranges below the frontier with their repair state). A seq already received
+is a duplicate; ``seq == frontier`` is delivered at once; a seq beyond it waits in the reorder
+buffer (``reorder_max`` messages / ``reorder_ns``), and when that overflows the missing seqs
+become a hole, the held ticks go out in order and an in-connection ``replay`` is requested.
+Replayed and late ticks only fill holes (delivered with ``replay=True`` -> BACKFILL); a
+heartbeat ``head_seq`` beyond everything received, ``tail_heartbeats`` times in a row, is a
+tail gap. A reconnect resumes from ``contiguous + 1`` (the resume block is a hole);
+``SEQ_EVICTED`` gives up the evicted part, ``EPOCH_CHANGED`` the old epoch's tail,
+``BAD_RESUME`` starts again from the server's head; every resume ends with
+:meth:`TrackerSink.resume_finished`. Transport-agnostic: the WebSocket client feeds it frames.
 """
 
 from __future__ import annotations
@@ -81,7 +57,6 @@ class Hole:
 
     @property
     def gap_id(self) -> str:
-        """``feed_a:{epoch}:{from_seq}-{to_seq}`` (02 §7.1 GapInfo)."""
         return f"feed_a:{self.epoch}:{self.lo}-{self.hi}"
 
     @property
@@ -96,20 +71,17 @@ class Hole:
 class TrackerSink(Protocol):
     """Callbacks of :class:`SeqTracker` (implemented by the Feed A client)."""
 
-    def deliver(self, seq: int, replay: bool, payload: Any) -> None:
-        """Hand one tick to the pipeline (``replay`` = backfill, never LIVE)."""
+    def deliver(self, seq: int, replay: bool, payload: Any) -> None: ...
 
     def request_replay(self, lo: int, hi: int) -> int | None:
         """Send ``replay {from_seq, to_seq}``; returns the request id (None when not connected)."""
 
     def gap_event(self, hole: Hole, event: str) -> None:
-        """``event``: ``open``; ``close`` (FILLED / UNRECOVERABLE); ``lost`` (opened and given up at once)."""
+        """``open``; ``close`` (FILLED / UNRECOVERABLE); ``lost`` (opened and given up at once)."""
 
-    def reconnect(self, reason: str) -> None:
-        """Drop the connection; the next one resumes from ``contiguous + 1``."""
+    def reconnect(self, reason: str) -> None: ...
 
-    def resume_finished(self) -> None:
-        """The resume after a (re)connection is complete: every seq up to the server head is received or given up."""
+    def resume_finished(self) -> None: ...
 
 
 @dataclass(slots=True)
@@ -134,8 +106,7 @@ class SeqTracker:
     ) -> None:
         self._sink = sink
         self._clock = clock
-        self._reorder_max = max(1, reorder_max)
-        self._reorder_ns = reorder_ns
+        self.configure(reorder_max=reorder_max, reorder_ns=reorder_ns)
         self._replay_timeout_ns = replay_timeout_ns
         self._max_attempts = max(1, max_attempts)
         self._tail_heartbeats = max(1, tail_heartbeats)
@@ -147,7 +118,6 @@ class SeqTracker:
         self._held_since: int | None = None
         self.holes: list[Hole] = []
         self._by_req: dict[int, Hole] = {}
-        # connection state
         self._connected = False
         self._resume_sent: dict[str, Any] | None = None
         self._resume_req: Any = None
@@ -158,29 +128,29 @@ class SeqTracker:
         self._tail_count = 0
         self._tail_head = 0
         self._disconnect_ns = 0
-        self.lost: list[tuple[str, int, int]] = []
         self.stats: dict[str, int] = {"delivered": 0, "duplicates": 0, "held": 0, "holes": 0, "unrecoverable": 0}
 
     def configure(self, *, reorder_max: int, reorder_ns: int) -> None:
-        """Change the reorder buffer limits (config hot reload)."""
+        """Reorder buffer limits (also on config hot reload)."""
         self._reorder_max = max(1, reorder_max)
         self._reorder_ns = reorder_ns
 
     # ------------------------------------------------------------------ state
     @property
     def max_seen(self) -> int:
-        top = self.frontier - 1
-        if self._held:
-            top = max(top, max(self._held))
-        return top
+        return max(self.frontier - 1, max(self._held, default=0))
 
     @property
     def last_head(self) -> int:
         return self._last_head
 
     @property
+    def held(self) -> int:
+        return len(self._held)
+
+    @property
     def complete(self) -> bool:
-        """No open hole, no held tick and no resume block pending: the stream is gap-free."""
+        """No open hole, no held tick and no resume pending: the stream is gap-free."""
         return self._connected and not self._held and not self._awaiting_resume and self._resume_range is None and not self.open_holes
 
     @property
@@ -188,23 +158,10 @@ class SeqTracker:
         return [h for h in self.holes if not h.closed]
 
     def oldest_open_hole_mono(self) -> int | None:
-        """Monotonic time the oldest still open hole was opened (coverage: Feed A with a stale gap is not current)."""
-        opened = [h.opened_mono for h in self.holes if not h.closed]
-        return min(opened) if opened else None
-
-    def lost_in(self, epoch: str, lo: int, hi: int) -> int:
-        """How many seqs of ``[lo, hi]`` of ``epoch`` were given up (upper bound for ranges lost as a block)."""
-        n = 0
-        for e, a, b in self.lost:
-            if e == epoch and a <= hi and b >= lo:
-                n += min(b, hi) - max(a, lo) + 1
-        return min(n, hi - lo + 1)
+        return min((h.opened_mono for h in self.holes if not h.closed), default=None)
 
     def restore(self, epoch: str | None, contiguous: int, since_ns: int = 0) -> None:
-        """Load the persisted cursor (03 §4.1): the next connection resumes from ``contiguous + 1``.
-
-        ``since_ns`` (when the cursor was persisted) starts the time window of the resume gap.
-        """
+        """Load the persisted cursor (03 §4.1): the next connection resumes from ``contiguous + 1``."""
         self.epoch = epoch
         self.contiguous = max(0, contiguous)
         self.frontier = self.contiguous + 1
@@ -214,10 +171,8 @@ class SeqTracker:
             self._disconnect_ns = since_ns
 
     def resume_request(self) -> dict[str, Any] | None:
-        """``resume`` field of the next ``subscribe`` (02 §9.1: the first missing seq)."""
-        if self.epoch is None:
-            return None
-        return {"epoch": self.epoch, "from_seq": self.contiguous + 1}
+        """``resume`` field of the next ``subscribe`` (02 §9.1)."""
+        return None if self.epoch is None else {"epoch": self.epoch, "from_seq": self.contiguous + 1}
 
     # ------------------------------------------------------------ connection
     def on_subscribe_sent(self, req: Any, resume: dict[str, Any] | None) -> None:
@@ -233,8 +188,7 @@ class SeqTracker:
         if epoch == self.epoch:
             self._last_head = max(self._last_head, head)
         if self._resume_sent is None:
-            # a connection without resume starts at the server's head (the snapshot follows)
-            self._start_fresh(epoch, head)
+            self._start_fresh(epoch, head)  # a connection without resume starts at the server's head
 
     def on_disconnect(self) -> None:
         """Connection lost: release held ticks (live data) and forget pending requests."""
@@ -242,8 +196,7 @@ class SeqTracker:
         self._awaiting_resume = False
         self._resume_range = None
         self._disconnect_ns = self._clock.now_ns()
-        if self._held:
-            self._release_held(request=False)
+        self._release_held(request=False)
         for h in self.holes:
             h.req = None
             h.answered = False
@@ -261,133 +214,103 @@ class SeqTracker:
     # ---------------------------------------------------------------- resume
     def on_replay_begin(self, req: Any, lo: int, hi: int) -> None:
         if self._awaiting_resume and req == self._resume_req:
-            self._on_resume_block(lo, hi)
+            self._awaiting_resume = False
+            self._resume_range = (lo, hi)
+            self.frontier = max(self.frontier, hi + 1)
+            if lo <= hi:
+                self._range_hole(lo, hi, RESUME, answered=True)
             return
         hole = self._by_req.get(req)
         if hole is None:
             logger.debug("feed_a.replay_begin_unknown_req", req=req)
             return
         hole.answered = True
-        if lo > hole.lo:
-            # 02 §9.1：请求区间超出环形缓冲时只补回缓冲内的部分，其余记为无法恢复
+        if lo > hole.lo:  # 02 §9.1：请求区间超出环形缓冲时只补回缓冲内的部分
             self._give_up(hole, [s for s in hole.missing if s < lo])
-
-    def _on_resume_block(self, lo: int, hi: int) -> None:
-        """Resume accepted: ``[lo, hi]`` is replayed now, live data continues at ``hi + 1``."""
-        self._awaiting_resume = False
-        self._resume_range = (lo, hi)
-        if hi >= self.frontier:
-            self.frontier = hi + 1
-        if lo > hi:
-            return
-        claimed: set[int] = set()
-        for h in self.open_holes:
-            claimed |= h.missing
-        missing = {s for s in range(max(lo, self.contiguous + 1), hi + 1) if s not in self._above and s not in claimed}
-        if not missing:
-            return
-        now = self._clock.now_ns()
-        hole = Hole(
-            epoch=self.epoch or "",
-            lo=lo,
-            hi=hi,
-            kind=RESUME,
-            missing=missing,
-            opened_mono=self._clock.monotonic_ns(),
-            from_ns=self._disconnect_ns or now,
-            to_ns=now,
-            answered=True,
-        )
-        self._add_hole(hole)
 
     def _finish_resume(self) -> None:
         """End of the resume block: whatever of its range is still missing is unrecoverable."""
         rng = self._resume_range
         self._resume_range = None
-        if rng is None:
-            return
-        lo, hi = rng
-        for h in self.open_holes:
-            self._give_up(h, [s for s in h.missing if lo <= s <= hi])
-            self._maybe_close(h)
-        self._sink.resume_finished()
+        if rng is not None:
+            for h in self.open_holes:
+                self._give_up(h, [s for s in h.missing if rng[0] <= s <= rng[1]])
+                self._maybe_close(h)
+            self._sink.resume_finished()
 
     def on_resume_rejected(self, reason: str, ring_low: int, head: int) -> None:
         """``EPOCH_CHANGED`` / ``SEQ_EVICTED`` / ``BAD_RESUME``; a snapshot follows in every case (02 §9.1)."""
         self._awaiting_resume = False
         new_epoch = self._welcome_epoch or self.epoch or ""
         if reason == "SEQ_EVICTED":
-            # 02 §9.1：只能补回 ring_low 之后的部分，之前的部分记为 GAP_UNRECOVERABLE
             for h in self.open_holes:
                 self._give_up(h, [s for s in h.missing if s < ring_low])
                 self._maybe_close(h)
-            lost = [s for s in range(self.contiguous + 1, ring_low) if s not in self._above]
+            lost = sum(1 for s in range(self.contiguous + 1, ring_low) if s not in self._above)
             if lost:
-                self._lost_range(self.epoch or new_epoch, self.contiguous + 1, ring_low - 1, len(lost), reason)
+                self._lost_range(self.epoch or new_epoch, self.contiguous + 1, ring_low - 1, lost, reason)
             self._skip_through(ring_low - 1)
             self._backfill_ring(ring_low, head)
-            self._sink.resume_finished()
-            return
-        if reason == "EPOCH_CHANGED":
+        else:
             old = self.epoch
             for h in self.open_holes:
                 self._give_up(h, list(h.missing))
                 self._maybe_close(h)
-            if old is not None and self._last_head > self.contiguous:
-                lost_n = sum(1 for s in range(self.contiguous + 1, self._last_head + 1) if s not in self._above)
-                if lost_n:
-                    self._lost_range(old, self.contiguous + 1, self._last_head, lost_n, reason)
-            self._start_fresh(new_epoch, ring_low - 1)
-            self._backfill_ring(ring_low, head)
-            self._last_head = head
-            self._sink.resume_finished()
-            return
-        # BAD_RESUME: our cursor is ahead of the server -> handled as a new connection
-        logger.warning("feed_a.bad_resume", contiguous=self.contiguous, head=head, epoch=new_epoch)
-        for h in self.open_holes:
-            self._give_up(h, list(h.missing))
-            self._maybe_close(h)
-        self._start_fresh(new_epoch, head)
+            if reason == "EPOCH_CHANGED":
+                if old is not None and self._last_head > self.contiguous:
+                    lost = sum(1 for s in range(self.contiguous + 1, self._last_head + 1) if s not in self._above)
+                    if lost:
+                        self._lost_range(old, self.contiguous + 1, self._last_head, lost, reason)
+                self._start_fresh(new_epoch, ring_low - 1)
+                self._backfill_ring(ring_low, head)
+                self._last_head = head
+            else:  # BAD_RESUME: our cursor is ahead of the server -> handled as a new connection
+                logger.warning("feed_a.bad_resume", contiguous=self.contiguous, head=head, epoch=new_epoch)
+                self._start_fresh(new_epoch, head)
         self._sink.resume_finished()
 
     def _backfill_ring(self, ring_low: int, head: int) -> None:
-        """Replay what the ring still holds of the missed range: ``[max(ring_low, contiguous+1), head]``."""
+        """Replay what the ring still holds of the missed range."""
         self.frontier = max(self.frontier, head + 1)
         lo = max(ring_low, self.contiguous + 1)
+        hole = self._range_hole(lo, head, RING)
+        if hole is not None:
+            self._request(hole)
+        elif not any(h.missing for h in self.open_holes):
+            self._skip_through(head)
+
+    def _range_hole(self, lo: int, hi: int, kind: str, *, answered: bool = False) -> Hole | None:
+        """Open a hole for the seqs of ``[lo, hi]`` not received and not claimed by another hole."""
         claimed: set[int] = set()
         for h in self.open_holes:
-            claimed |= h.missing  # older holes above ring_low keep their own seqs (and requests)
-        missing = {s for s in range(lo, head + 1) if s not in self._above and s not in claimed}
+            claimed |= h.missing
+        missing = {s for s in range(max(lo, self.contiguous + 1), hi + 1) if s not in self._above and s not in claimed}
         if not missing:
-            if not claimed:
-                self._skip_through(head)
-            return
+            return None
         now = self._clock.now_ns()
-        hole = Hole(
-            epoch=self.epoch or "",
-            lo=lo,
-            hi=head,
-            kind=RING,
-            missing=missing,
-            opened_mono=self._clock.monotonic_ns(),
-            from_ns=self._disconnect_ns or now,
-            to_ns=now,
-        )
+        from_ns = now if kind == TAIL else self._disconnect_ns or now  # resume / ring gaps span the disconnection
+        hole = Hole(self.epoch or "", lo, hi, kind, missing, self._clock.monotonic_ns(), from_ns, now, answered=answered)
         self._add_hole(hole)
-        self._request(hole)
+        return hole
 
     # ----------------------------------------------------------------- ticks
     def on_tick(self, seq: int, replay: bool, payload: Any) -> None:
         if seq <= self.contiguous or seq in self._above or seq in self._held:
             self.stats["duplicates"] += 1
-            hole = self._hole_covering(seq)
-            if hole is not None:
-                hole.duplicates += 1
+            for h in self.holes:
+                if not h.closed and h.lo <= seq <= h.hi:
+                    h.duplicates += 1
+                    break
             return
         if seq == self.frontier:
             self._deliver(seq, replay, payload)
             self.frontier = seq + 1
-            self._drain_held()
+            while self.frontier in self._held:
+                held = self._held.pop(self.frontier)
+                self._deliver(self.frontier, held.replay, held.payload)
+                self.frontier += 1
+            if not self._held:
+                self._held_since = None
             return
         if seq > self.frontier:
             self._held[seq] = _Held(payload, replay)
@@ -397,9 +320,16 @@ class SeqTracker:
             if len(self._held) > self._reorder_max:
                 self._release_held(request=True)
             return
-        # seq < frontier, never received: it fills a hole (replayed, or a late live tick)
-        self._deliver(seq, True, payload)
-        self._fill(seq)
+        self._deliver(seq, True, payload)  # below the frontier, never received: fills a hole
+        for h in self.holes:
+            if not h.closed and seq in h.missing:
+                h.missing.discard(seq)
+                h.filled += 1
+                if not h.missing and h.kind != RESUME:
+                    if h.req is not None:
+                        self._by_req.pop(h.req, None)
+                    self._maybe_close(h)
+                return
 
     def on_replay_end(self, req: Any, hi: int) -> None:
         if req == self._resume_req and self._resume_range is not None:
@@ -408,9 +338,7 @@ class SeqTracker:
         hole = self._by_req.pop(req, None)
         if hole is None or hole.closed:
             return
-        rest = [s for s in hole.missing if s <= hi]
-        if rest:
-            self._give_up(hole, rest)
+        self._give_up(hole, [s for s in hole.missing if s <= hi])
         self._maybe_close(hole)
         if not hole.closed:
             hole.req = None  # something above ``hi`` still missing: poll() asks again
@@ -422,52 +350,30 @@ class SeqTracker:
         hole = self._by_req.pop(req, None) if req is not None else None
         if hole is None:
             logger.warning("feed_a.error", req=req, code=code)
-            return
-        if code in ("SEQ_EVICTED", "BAD_REQUEST"):
-            # 02 §9.1：整段已被挤出环形缓冲 -> GAP_UNRECOVERABLE
+        elif code in ("SEQ_EVICTED", "BAD_REQUEST"):  # 02 §9.1：整段已被挤出环形缓冲
             self._give_up(hole, list(hole.missing))
             self._maybe_close(hole)
-            return
-        logger.warning("feed_a.replay_error", req=req, code=code, gap_id=hole.gap_id)
-        hole.req = None
+        else:
+            logger.warning("feed_a.replay_error", req=req, code=code, gap_id=hole.gap_id)
+            hole.req = None
 
     def on_heartbeat(self, head: int) -> None:
         self._last_head = max(self._last_head, head)
-        if self._awaiting_resume or self._resume_range is not None:
+        if self._awaiting_resume or self._resume_range is not None or head <= self.max_seen:
             self._tail_count = 0
             return
-        if head > self.max_seen:
-            if self._tail_count and head >= self._tail_head:
-                self._tail_count += 1
-            else:
-                self._tail_count = 1
-                self._tail_head = head
-            if self._tail_count >= self._tail_heartbeats:
-                self._tail_count = 0
-                self._tail_gap(self._tail_head)
+        if self._tail_count and head >= self._tail_head:
+            self._tail_count += 1
         else:
+            self._tail_count, self._tail_head = 1, head
+        if self._tail_count >= self._tail_heartbeats:
             self._tail_count = 0
-
-    def _tail_gap(self, head: int) -> None:
-        if self._held:
             self._release_held(request=True)
-        lo = self.frontier
-        if head < lo:
-            return
-        now = self._clock.now_ns()
-        hole = Hole(
-            epoch=self.epoch or "",
-            lo=lo,
-            hi=head,
-            kind=TAIL,
-            missing=set(range(lo, head + 1)),
-            opened_mono=self._clock.monotonic_ns(),
-            from_ns=now,
-            to_ns=now,
-        )
-        self.frontier = head + 1
-        self._add_hole(hole)
-        self._request(hole)
+            if self._tail_head >= self.frontier:
+                hole = self._range_hole(self.frontier, self._tail_head, TAIL)
+                self.frontier = self._tail_head + 1
+                if hole is not None:
+                    self._request(hole)
 
     # ---------------------------------------------------------------- timers
     def poll(self) -> None:
@@ -502,31 +408,20 @@ class SeqTracker:
             return
         if seq == self.contiguous + 1:
             self.contiguous = seq
-            above = self._above
-            while self.contiguous + 1 in above:
-                above.remove(self.contiguous + 1)
+            while self.contiguous + 1 in self._above:
+                self._above.remove(self.contiguous + 1)
                 self.contiguous += 1
         else:
             self._above.add(seq)
 
     def _skip_through(self, seq: int) -> None:
         """Consider every seq ``<= seq`` done (received or given up)."""
-        if seq <= self.contiguous:
-            return
-        self._above = {s for s in self._above if s > seq}
-        self.contiguous = seq
-        above = self._above
-        while self.contiguous + 1 in above:
-            above.remove(self.contiguous + 1)
-            self.contiguous += 1
-
-    def _drain_held(self) -> None:
-        while self.frontier in self._held:
-            h = self._held.pop(self.frontier)
-            self._deliver(self.frontier, h.replay, h.payload)
-            self.frontier += 1
-        if not self._held:
-            self._held_since = None
+        if seq > self.contiguous:
+            self.contiguous = seq
+            self._above = {s for s in self._above if s > seq}
+            while self.contiguous + 1 in self._above:
+                self._above.remove(self.contiguous + 1)
+                self.contiguous += 1
 
     def _release_held(self, *, request: bool) -> None:
         """Reorder window exhausted: the missing seqs become holes, held ticks go out in order."""
@@ -534,39 +429,25 @@ class SeqTracker:
             return
         top = max(self._held)
         runs: list[tuple[int, int]] = []
-        run_start: int | None = None
+        start: int | None = None
         for s in range(self.frontier, top + 1):
             if s in self._held:
-                if run_start is not None:
-                    runs.append((run_start, s - 1))
-                    run_start = None
-            elif run_start is None:
-                run_start = s
-        if run_start is not None:
-            runs.append((run_start, top))
-        now = self._clock.now_ns()
-        mono = self._clock.monotonic_ns()
-        new_holes: list[Hole] = []
-        for lo, hi in runs:
-            hole = Hole(
-                epoch=self.epoch or "",
-                lo=lo,
-                hi=hi,
-                kind=HOLE,
-                missing=set(range(lo, hi + 1)),
-                opened_mono=mono,
-                from_ns=now,
-                to_ns=now,
-            )
+                if start is not None:
+                    runs.append((start, s - 1))
+                    start = None
+            elif start is None:
+                start = s
+        now, mono = self._clock.now_ns(), self._clock.monotonic_ns()
+        holes = [Hole(self.epoch or "", lo, hi, HOLE, set(range(lo, hi + 1)), mono, now, now) for lo, hi in runs]
+        for hole in holes:
             self._add_hole(hole)
-            new_holes.append(hole)
         for s in sorted(self._held):
-            h = self._held.pop(s)
-            self._deliver(s, h.replay, h.payload)
+            held = self._held.pop(s)
+            self._deliver(s, held.replay, held.payload)
         self.frontier = top + 1
         self._held_since = None
         if request:
-            for hole in new_holes:
+            for hole in holes:
                 self._request(hole)
 
     def _add_hole(self, hole: Hole) -> None:
@@ -580,55 +461,22 @@ class SeqTracker:
         if hole.closed or not self._connected or not hole.missing:
             return
         req = self._sink.request_replay(min(hole.missing), max(hole.missing))
-        if req is None:
-            return
-        hole.req = req
-        hole.answered = False
-        hole.attempts += 1
-        hole.requested_mono = self._clock.monotonic_ns()
-        self._by_req[req] = hole
-
-    def _hole_covering(self, seq: int) -> Hole | None:
-        for h in self.holes:
-            if not h.closed and h.lo <= seq <= h.hi:
-                return h
-        return None
-
-    def _fill(self, seq: int) -> None:
-        for h in self.holes:
-            if not h.closed and seq in h.missing:
-                h.missing.discard(seq)
-                h.filled += 1
-                if not h.missing and h.kind != RESUME:
-                    if h.req is not None:
-                        self._by_req.pop(h.req, None)
-                    self._maybe_close(h)
-                return
+        if req is not None:
+            hole.req = req
+            hole.answered = False
+            hole.attempts += 1
+            hole.requested_mono = self._clock.monotonic_ns()
+            self._by_req[req] = hole
 
     def _give_up(self, hole: Hole, seqs: Iterable[int]) -> None:
-        given: list[int] = []
+        n = 0
         for s in list(seqs):
             if s in hole.missing:
                 hole.missing.discard(s)
                 self._mark_done(s)
-                given.append(s)
-        if given:
-            n = len(given)
-            hole.unrecoverable += n
-            self.stats["unrecoverable"] += n
-            given.sort()
-            start = prev = given[0]
-            for s in given[1:]:
-                if s != prev + 1:
-                    self._note_lost(hole.epoch, start, prev)
-                    start = s
-                prev = s
-            self._note_lost(hole.epoch, start, prev)
-
-    def _note_lost(self, epoch: str, lo: int, hi: int) -> None:
-        self.lost.append((epoch, lo, hi))
-        if len(self.lost) > 512:
-            del self.lost[:256]
+                n += 1
+        hole.unrecoverable += n
+        self.stats["unrecoverable"] += n
 
     def _maybe_close(self, hole: Hole) -> None:
         if hole.closed or hole.missing:
@@ -639,21 +487,9 @@ class SeqTracker:
 
     def _lost_range(self, epoch: str, lo: int, hi: int, count: int, reason: str) -> None:
         now = self._clock.now_ns()
-        hole = Hole(
-            epoch=epoch,
-            lo=lo,
-            hi=hi,
-            kind=LOST,
-            missing=set(),
-            opened_mono=self._clock.monotonic_ns(),
-            from_ns=self._disconnect_ns or now,
-            to_ns=now,
-            unrecoverable=count,
-            status=GapStatus.UNRECOVERABLE,
-        )
+        hole = Hole(epoch, lo, hi, LOST, set(), self._clock.monotonic_ns(), self._disconnect_ns or now, now, unrecoverable=count, status=GapStatus.UNRECOVERABLE)
         hole.detail["reason"] = reason
         self.stats["unrecoverable"] += count
-        self._note_lost(epoch, lo, hi)
         self.holes.append(hole)
         self._sink.gap_event(hole, "lost")
 

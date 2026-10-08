@@ -286,8 +286,8 @@ def test_seq_evicted_inside_an_open_hole_keeps_its_rest_and_backfills_the_ring()
     assert tr.contiguous == 30 and tr.complete
 
 
-def test_resume_finished_is_reported_and_lost_ranges_are_kept() -> None:
-    """L10: every resume ends with resume_finished; given-up seqs are kept as ranges per epoch."""
+def test_resume_finished_is_reported_and_given_up_seqs_are_counted() -> None:
+    """Every resume ends with resume_finished; the seqs given up are counted."""
     sink, clock = Sink(), Clock()
     tr = SeqTracker(sink, clock, reorder_max=4, reorder_ns=100 * MS)
     tr.restore("E1", 10, since_ns=clock.now_ns() - 5_000 * MS)
@@ -295,7 +295,7 @@ def test_resume_finished_is_reported_and_lost_ranges_are_kept() -> None:
     tr.on_welcome("E1", 30, 20)
     tr.on_resume_rejected("SEQ_EVICTED", 20, 30)
     assert sink.resumes == 1
-    assert tr.lost_in("E1", 11, 19) == 9 and tr.lost_in("E1", 20, 30) == 0 and tr.lost_in("E0", 11, 19) == 0
+    assert tr.stats["unrecoverable"] == 9 and tr.contiguous == 19  # seqs 11..19 were evicted
     # the resume gap starts when the cursor was persisted (a restart), not at the reconnection
     ring = [h for h in tr.holes if h.kind == RING][0]
     assert ring.from_ns == clock.now_ns() - 5_000 * MS

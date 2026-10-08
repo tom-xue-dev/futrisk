@@ -1,36 +1,25 @@
-"""Tick recording: raw shards per source, canonical day files, tick queries (03 §5.1, 02 §6.2 md.ticks).
+"""Tick recording: raw shards per source (plus an optional wire archive) and canonical day files (03 §5.1).
 
-**Raw** (``ticks/raw/{trading_day}/{source}/part-{epoch_ms}-{n}.parquet``): every received,
-normalized state with its ``mode`` (LIVE, BACKFILL, QUARANTINED, REJECTED, DUPLICATE) and
-``reject_reason``. The event loop only appends ``(tick, mode, reason, epoch)`` tuples; every
-``record_handoff_s`` they are handed to one recorder thread, which builds the rows and
-appends them to :class:`~futrisk.marketdata.recorder.ParquetShardWriter` (crash-safe
-shards, roll every 5 s or 10k rows, spill directory on write errors). The bucket is the
-trading day of the *receive* time, like the stand-alone recorder. The loop-side buffer is
-bounded (``recorder_max_pending_rows``): beyond it rows are dropped, counted and logged.
+**Raw**: every received, normalized state with its ``mode`` (LIVE, BACKFILL, REJECTED,
+DUPLICATE) and ``reject_reason``; the bucket is the trading day of the *receive* time. The
+event loop only appends ``(tick, mode, reason, epoch)`` tuples (bounded by
+``max_pending_rows``: beyond it rows are dropped, counted and logged); every hand-off they go to
+one recorder thread that builds the rows and feeds the :class:`~.shards.ParquetShardWriter` of
+their source (crash-safe shards, roll every 5 s or 10k rows, spill directory on write errors).
+The optional ``wire_dir`` archives raw HTTP responses the same way (the Sina recorder CLI).
 
-**Cursor durability**: with each hand-off the service passes the sources' cursor marks
-(Feed A ``(epoch, contiguous seq)``); a mark becomes *durable* only once the source's
-writer has no pending rows, i.e. every row up to it is in a closed shard. Only durable
-marks are persisted to ``feed_cursors`` (03 §4.1: the cursor never runs ahead of the
-recording, so a crash always resumes before the first lost row). A source that lost rows
-(loop buffer full, or the writer dropping rows because no directory is writable) never
-gets a durable mark again in this process: after a restart it resumes from the last
-cursor that really was on disk, and the dropped range is replayed.
-
-**Duplicates after a crash**: rows written after the last persisted cursor are replayed
-after the restart (the resume starts at the cursor), so the raw files can hold the same
-state twice (the second copy usually as BACKFILL or DUPLICATE). The canonical file removes
-them; raw consumers (``md.ticks``) may see both.
+**Cursor durability**: with each hand-off the service passes the sources' cursor marks; a
+mark becomes *durable* only once the source's writer has no pending rows (every row up to it
+is in a closed shard), and only durable marks are persisted (03 §4.1 ``feed_cursors``: the
+cursor never runs ahead of the recording). A source that lost rows never gets a durable mark
+again in this process. Rows written after the last persisted cursor are replayed after a
+restart, so the raw files can hold a state twice.
 
 **Canonical** (``ticks/canonical/{trading_day}.parquet``): LIVE + BACKFILL rows of the day
-(read from the day's folders - primary and spill - and the next day's, for late replays),
-deduplicated by ``(instrument_id, fingerprint, exch_ts_ns)`` keeping LIVE first, then the
-higher source priority; rows of a second-resolution source (Sina) are dropped when a
-source with exact timestamps delivered the same state. A quote that reverted to an earlier
-state (same fingerprint, later time) is a distinct state and kept. Sorted by
-``order_key``. The list of raw shards it was built from is stored in the file's schema
-metadata; the file is rebuilt when that list changes.
+(primary and spill folders, plus the next day's for late replays), deduplicated by
+``(instrument_id, fingerprint, exch_ts_ns)`` keeping LIVE first, then the higher source
+priority; second-resolution (Sina) rows are dropped when an exact source delivered the same
+state. Sorted by ``order_key``; rebuilt when the list of raw shards changes (file metadata).
 """
 
 from __future__ import annotations
@@ -38,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -51,26 +41,32 @@ import pyarrow.parquet as pq
 from loguru import logger
 
 from futrisk.common.clock import Clock
-from futrisk.marketdata.recorder import ParquetShardWriter, ShardWriteError, list_shards, read_shards
-from futrisk.marketdata.tickschema import TICK_COLUMNS, TICK_SCHEMA
-from futrisk.messages.enums import Exchange, SourceId, TickMode
+from futrisk.messages.enums import SourceId, TickMode
 from futrisk.messages.md import FLAG_COARSE_TS, Tick
+from futrisk.services.md_gateway.shards import (
+    TICK_COLUMNS,
+    TICK_PREFIX,
+    TICK_SCHEMA,
+    WIRE_PREFIX,
+    WIRE_SCHEMA,
+    ParquetShardWriter,
+    ShardWriteError,
+    list_shards,
+    read_shards,
+    reject_row,
+    tick_row,
+)
 
 T = TypeVar("T")
-TICK_PREFIX = "part"
 _SOURCES_META = b"futrisk.sources"
-_PANDAS_TYPES: dict[pa.DataType, Any] = {
-    pa.int64(): pd.Int64Dtype(),
-    pa.int32(): pd.Int32Dtype(),
-    pa.uint64(): pd.UInt64Dtype(),
-}
+_PANDAS_TYPES: dict[pa.DataType, Any] = {pa.int64(): pd.Int64Dtype(), pa.int32(): pd.Int32Dtype(), pa.uint64(): pd.UInt64Dtype()}
 _DROP_LOG_INTERVAL_S = 10.0
 
 Pending = tuple[str, Any]  # (bucket, (tick, mode, reason, epoch) | row dict)
 
 
 class TickRecorder:
-    """Raw shard writers of every source behind a single recorder thread."""
+    """Raw shard writers of every source (and the optional wire archive) behind a single recorder thread."""
 
     def __init__(
         self,
@@ -83,32 +79,35 @@ class TickRecorder:
         roll_rows: int = 10_000,
         spill_dirs: Iterable[Path] = (),
         max_pending_rows: int = 500_000,
+        wire_dir: Path | None = None,
     ) -> None:
         self.raw_dir = Path(raw_dir)
         self.spill_dirs = [Path(p) for p in spill_dirs]
-        self._writers: dict[SourceId, ParquetShardWriter] = {
-            src: ParquetShardWriter(
-                self.raw_dir,
-                src.lower(),
-                TICK_SCHEMA,
-                prefix=TICK_PREFIX,
-                epoch_ms=epoch_ms,
-                clock=wall_clock,
-                roll_s=roll_s,
-                roll_rows=roll_rows,
+
+        def writer(root: Path, src: SourceId, schema: pa.Schema, prefix: str) -> ParquetShardWriter:
+            return ParquetShardWriter(
+                root, src.lower(), schema, prefix=prefix, epoch_ms=epoch_ms, clock=wall_clock, roll_s=roll_s, roll_rows=roll_rows,
                 spill_roots=self.spill_dirs,
             )
-            for src in sources
-        }
+
+        self._writers = {src: writer(self.raw_dir, src, TICK_SCHEMA, TICK_PREFIX) for src in sources}
+        self._wire = {src: writer(wire_dir, src, WIRE_SCHEMA, WIRE_PREFIX) for src in self._writers} if wire_dir is not None else {}
         self._pending: dict[SourceId, list[Pending]] = {src: [] for src in self._writers}
+        self._pending_wire: list[tuple[SourceId, str, dict[str, Any]]] = []
         self._pending_n = 0
         self._max_pending = max(1, max_pending_rows)
+        self._lock = threading.Lock()  # loop buffer: appended by the loop, taken by hand-offs and the emergency flush
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="md-recorder")
         self.durable: dict[SourceId, Any] = {}
         self.rows_in = 0
+        self.wire_rows = 0
         self.write_errors = 0
         self.writer_pending = 0
         self.dropped_rows = 0
+        self.shards_written = 0
+        self.spilled_shards = 0
+        self.last_shard: Path | None = None
+        self.last_spill: Path | None = None
         self.lossy: set[SourceId] = set()
         self._last_drop_log = 0.0
         self._closed = False
@@ -116,38 +115,32 @@ class TickRecorder:
     # ---------------------------------------------------------------- loop side
     def add_tick(self, source: SourceId, bucket: str, tick: Tick, mode: TickMode, reason: str | None, epoch: str | None) -> None:
         """Buffer one normalized state (the row is built on the recorder thread)."""
-        if self._pending_n >= self._max_pending:
-            self._drop(source)
-            return
-        lst = self._pending.get(source)
-        if lst is None:
-            lst = self._pending[source] = []
-        lst.append((bucket, (tick, mode, reason, epoch)))
-        self._pending_n += 1
-        self.rows_in += 1
+        self._put(source, bucket, (tick, mode, reason, epoch))
 
     def add(self, source: SourceId, bucket: str, row: dict[str, Any]) -> None:
         """Buffer one ready-made row (records that could not be normalized)."""
-        if self._pending_n >= self._max_pending:
-            self._drop(source)
-            return
-        self._pending.setdefault(source, []).append((bucket, row))
-        self._pending_n += 1
-        self.rows_in += 1
+        self._put(source, bucket, row)
 
-    def _drop(self, source: SourceId) -> None:
-        self.dropped_rows += 1
-        self.lossy.add(source)
+    def add_wire(self, source: SourceId, bucket: str, row: dict[str, Any]) -> None:
+        """Archive one raw poll (``wire_dir`` only)."""
+        if self._wire:
+            with self._lock:
+                self._pending_wire.append((source, bucket, row))
+                self.wire_rows += 1
+
+    def _put(self, source: SourceId, bucket: str, item: Any) -> None:
+        with self._lock:
+            if self._pending_n < self._max_pending:
+                self._pending.setdefault(source, []).append((bucket, item))
+                self._pending_n += 1
+                self.rows_in += 1
+                return
+            self.dropped_rows += 1
+            self.lossy.add(source)
         now = time.monotonic()
         if now - self._last_drop_log >= _DROP_LOG_INTERVAL_S:
             self._last_drop_log = now
-            logger.critical(
-                "md.recorder.rows_dropped",
-                source=str(source),
-                dropped=self.dropped_rows,
-                pending=self._pending_n,
-                why="the recorder thread cannot keep up; cursors stop advancing",
-            )
+            logger.critical("md.recorder.rows_dropped", source=str(source), dropped=self.dropped_rows, pending=self._pending_n)
 
     @property
     def pending_rows(self) -> int:
@@ -157,59 +150,72 @@ class TickRecorder:
         """Rows accepted but not yet on disk (loop buffer + writer buffers as of the last hand-off)."""
         return self._pending_n + self.writer_pending
 
-    def _take(self) -> dict[SourceId, list[Pending]]:
-        batch = {src: rows for src, rows in self._pending.items() if rows}
-        self._pending = {src: [] for src in self._writers}
-        self._pending_n = 0
-        return batch
+    def _take(self) -> tuple[dict[SourceId, list[Pending]], list[tuple[SourceId, str, dict[str, Any]]]]:
+        with self._lock:
+            batch = {src: rows for src, rows in self._pending.items() if rows}
+            wire = self._pending_wire
+            self._pending = {src: [] for src in self._writers}
+            self._pending_wire = []
+            self._pending_n = 0
+        return batch, wire
 
     async def handoff(self, marks: Mapping[SourceId, Any], *, flush: bool = False) -> None:
         """Move buffered rows to the recorder thread; ``flush`` writes shards now."""
-        if self._closed:
-            return
-        batch = self._take()
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executor, self._write, batch, dict(marks), flush, False)
+        if not self._closed:  # shielded: rows already taken from the buffer must be written even if the caller is cancelled
+            await asyncio.shield(asyncio.get_running_loop().run_in_executor(self._executor, self._write, *self._take(), dict(marks), flush, False))
 
     async def run(self, fn: Callable[[], T]) -> T:
         """Run ``fn`` on the recorder thread, after every hand-off queued so far."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, fn)
+        return await asyncio.get_running_loop().run_in_executor(self._executor, fn)
 
-    async def close(self, marks: Mapping[SourceId, Any]) -> None:
-        """Final flush (primary directory, then spill directories) and stop the thread (without blocking the loop)."""
+    async def close(self, marks: Mapping[SourceId, Any]) -> bool:
+        """Final flush (primary directory, then spill directories) and stop the thread; False when rows could not be written."""
         if self._closed:
-            return
-        batch = self._take()
-        loop = asyncio.get_running_loop()
+            return self.writer_pending == 0
         try:
-            await loop.run_in_executor(self._executor, self._write, batch, dict(marks), True, True)
+            await asyncio.shield(asyncio.get_running_loop().run_in_executor(self._executor, self._write, *self._take(), dict(marks), True, True))
         finally:
             self._closed = True
-            # L4: jobs queued behind the final write finish on the recorder thread; never block the loop
-            self._executor.shutdown(wait=False)
+            self._executor.shutdown(wait=False)  # jobs queued behind the final write finish on the recorder thread
+        return self.writer_pending == 0
+
+    def emergency_flush(self, timeout_s: float = 3.0) -> bool:
+        """Final flush from another thread (console close / logoff); gives up after ``timeout_s``."""
+        if self._closed:
+            return True
+        try:
+            self._executor.submit(self._write, *self._take(), {}, True, True).result(timeout_s)
+        except Exception as exc:
+            logger.critical(f"md.recorder.emergency_flush failed: {exc!r}")
+            return False
+        return self.writer_pending == 0
 
     # -------------------------------------------------------------- thread side
-    def _write(self, batch: dict[SourceId, list[Pending]], marks: dict[SourceId, Any], flush: bool, final: bool) -> None:
+    def _write(
+        self, batch: dict[SourceId, list[Pending]], wire: list[tuple[SourceId, str, dict[str, Any]]], marks: dict[SourceId, Any], flush: bool, final: bool
+    ) -> None:
         for src, items in batch.items():
             w = self._writers.get(src)
             if w is None:
                 continue
             for bucket, item in items:
-                row = tick_row(*item) if isinstance(item, tuple) else item
-                self._guard(src, w.append, bucket, row)
+                self._guard(src, w.append, bucket, tick_row(*item) if isinstance(item, tuple) else item)
+        for src, bucket, row in wire:
+            self._guard(src, self._wire[src].append, bucket, row)
         for src, w in self._writers.items():
-            if final:
-                self._guard(src, w.close)
-            elif flush:
-                self._guard(src, w.flush)
-            else:
-                self._guard(src, w.roll_if_due)
+            self._guard(src, w.close if final else w.flush if flush else w.roll_if_due)
             if w.dropped_rows:
                 self.lossy.add(src)
             if w.pending_rows == 0 and src in marks and src not in self.lossy:
                 self.durable[src] = marks[src]
-        self.writer_pending = sum(w.pending_rows for w in self._writers.values())  # read by the loop (heartbeat)
+        for src, w in self._wire.items():
+            self._guard(src, w.close if final else w.flush if flush else w.roll_if_due)
+        writers = [*self._writers.values(), *self._wire.values()]
+        self.writer_pending = sum(w.pending_rows for w in writers)  # read by the loop (heartbeat)
+        self.shards_written = sum(w.shards_written for w in writers)
+        self.spilled_shards = sum(w.spilled_shards for w in writers)
+        self.last_shard = next((w.last_shard for w in self._writers.values() if w.last_shard is not None), None)
+        self.last_spill = next((w.last_spill for w in writers if w.last_spill is not None), None)
 
     def _guard(self, src: SourceId, fn: Callable[..., Any], *args: Any) -> None:
         try:
@@ -222,80 +228,15 @@ class TickRecorder:
             logger.exception("md.recorder.write_failed", source=str(src))
 
 
-# ---------------------------------------------------------------- rows
-def tick_row(tick: Tick, mode: TickMode, reason: str | None, epoch: str | None) -> dict[str, Any]:
-    """Raw row of a normalized state (03 §5.1 columns = ``Tick`` fields + epoch/mode/reject_reason)."""
-    return {
-        "instrument_id": tick.instrument_id,
-        "exchange": str(tick.exchange),
-        "trading_day": tick.trading_day,
-        "action_day": tick.action_day,
-        "exch_ts_ns": tick.exch_ts_ns,
-        "recv_ns": tick.recv_ns,
-        "last": tick.last,
-        "bid1": tick.bid1,
-        "ask1": tick.ask1,
-        "open": tick.open,
-        "high": tick.high,
-        "low": tick.low,
-        "upper_limit": tick.upper_limit,
-        "lower_limit": tick.lower_limit,
-        "pre_settle": tick.pre_settle,
-        "pre_close": tick.pre_close,
-        "avg_price": tick.avg_price,
-        "turnover": tick.turnover,
-        "volume": tick.volume,
-        "open_interest": tick.open_interest,
-        "bid_vol1": tick.bid_vol1,
-        "ask_vol1": tick.ask_vol1,
-        "pre_open_interest": tick.pre_open_interest,
-        "source": str(tick.source),
-        "source_seq": tick.source_seq,
-        "epoch": epoch,
-        "fingerprint": tick.fingerprint,
-        "flags": tick.flags,
-        "mode": str(mode),
-        "reject_reason": reason,
-    }
-
-
-def reject_row(
-    *, instrument_id: str, exchange: str | None, trading_day: str, recv_ns: int, source: SourceId, reason: str, epoch: str | None, seq: int | None
-) -> dict[str, Any]:
-    """Row of a record that could not be normalized: identifiers only (03 §5.1)."""
-    row: dict[str, Any] = dict.fromkeys(TICK_COLUMNS)
-    row.update(
-        instrument_id=instrument_id,
-        exchange=exchange,
-        trading_day=trading_day,
-        action_day=trading_day,
-        recv_ns=recv_ns,
-        source=str(source),
-        source_seq=seq,
-        epoch=epoch,
-        mode=str(TickMode.REJECTED),
-        reject_reason=reason,
-    )
-    return row
-
-
-# ---------------------------------------------------------------- reading
+# ---------------------------------------------------------------- canonical day files
 def day_shards(
-    raw_dir: Path,
-    trading_day: str,
-    sources: Iterable[SourceId],
-    next_day: str | None = None,
-    spill_dirs: Iterable[Path] = (),
+    raw_dir: Path, trading_day: str, sources: Iterable[SourceId], next_day: str | None = None, spill_dirs: Iterable[Path] = ()
 ) -> list[Path]:
     """Raw shards of ``trading_day`` (plus the next day's folder, where late replays land), spill directories included."""
-    out: list[Path] = []
-    roots = [Path(raw_dir), *(Path(p) for p in spill_dirs)]
     srcs = list(sources)
-    for td in [trading_day] + ([next_day] if next_day else []):
-        for root in roots:
-            for src in srcs:
-                out.extend(list_shards(root, td, src.lower(), TICK_PREFIX))
-    return out
+    roots = [Path(raw_dir), *(Path(p) for p in spill_dirs)]
+    days = [trading_day] + ([next_day] if next_day else [])
+    return [p for td in days for root in roots for src in srcs for p in list_shards(root, td, src.lower(), TICK_PREFIX)]
 
 
 def _signature(paths: Iterable[Path], root: Path) -> list[list[Any]]:
@@ -321,16 +262,10 @@ def canonical_fresh(path: Path, shards: list[Path], raw_dir: Path) -> bool:
     if not path.exists():
         return False
     try:
-        meta = pq.read_schema(path).metadata or {}
+        stored = (pq.read_schema(path).metadata or {}).get(_SOURCES_META)
     except Exception:
         return False
-    stored = meta.get(_SOURCES_META)
     return stored is not None and json.loads(stored) == _signature(shards, raw_dir)
-
-
-def read_day_frame(shards: list[Path]) -> pd.DataFrame:
-    table = read_shards(shards, TICK_SCHEMA)
-    return table.to_pandas(types_mapper=_PANDAS_TYPES.get)
 
 
 def build_canonical(
@@ -354,8 +289,7 @@ def build_canonical(
     if table.num_rows:
         mode = pc.cast(table["mode"], pa.string())
         td_col = pc.cast(table["trading_day"], pa.string())
-        mask = pc.and_(pc.is_in(mode, value_set=pa.array([str(TickMode.LIVE), str(TickMode.BACKFILL)])), pc.equal(td_col, trading_day))
-        table = table.filter(mask)
+        table = table.filter(pc.and_(pc.is_in(mode, value_set=pa.array([str(TickMode.LIVE), str(TickMode.BACKFILL)])), pc.equal(td_col, trading_day)))
     df = table.to_pandas(types_mapper=_PANDAS_TYPES.get)
     if len(df):
         for col in ("instrument_id", "source", "mode"):
@@ -367,16 +301,12 @@ def build_canonical(
         df = df.drop_duplicates(["instrument_id", "fingerprint", "exch_ts_ns"], keep="first")
         if bool(df["_coarse"].any()):
             key = df["instrument_id"] + ":" + df["fingerprint"].astype(str)
-            exact = set(key[~df["_coarse"]])
-            df = df[~(df["_coarse"] & key.isin(exact))]
-        df = df.sort_values(["instrument_id", "volume", "exch_ts_ns", "_prio"], kind="stable")
-        df = df[list(TICK_COLUMNS)]
+            df = df[~(df["_coarse"] & key.isin(set(key[~df["_coarse"]])))]
+        df = df.sort_values(["instrument_id", "volume", "exch_ts_ns", "_prio"], kind="stable")[list(TICK_COLUMNS)]
     else:
         df = pd.DataFrame({c: [] for c in TICK_COLUMNS})
-    schema = TICK_SCHEMA.with_metadata(
-        {**(TICK_SCHEMA.metadata or {}), _SOURCES_META: json.dumps(_signature(shards, raw_dir)).encode("utf-8")}
-    )
-    result = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
+    meta = {**(TICK_SCHEMA.metadata or {}), _SOURCES_META: json.dumps(_signature(shards, raw_dir)).encode("utf-8")}
+    result = pa.Table.from_pandas(df, schema=TICK_SCHEMA.with_metadata(meta), preserve_index=False)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(f".{out.name}.tmp")
     with open(tmp, "wb") as fh:
@@ -392,96 +322,4 @@ def read_canonical(path: Path) -> pd.DataFrame:
     return pq.read_table(path).to_pandas(types_mapper=_PANDAS_TYPES.get)
 
 
-class ShardCache:
-    """Per-day cache of raw shards for ``md.ticks`` (L3): only shards not read yet are loaded.
-
-    Closed shards are immutable, so the cache is keyed by path; a changed list (new shards,
-    purged ones) only reads what is new. Recorder thread only.
-    """
-
-    def __init__(self, max_days: int = 1) -> None:
-        self._days: dict[str, tuple[list[Path], pa.Table]] = {}
-        self._max_days = max_days
-        self.reads = 0
-
-    def table(self, trading_day: str, shards: list[Path]) -> pa.Table:
-        hit = self._days.get(trading_day)
-        if hit is not None:
-            known, table = hit
-            known_set = set(known)
-            if known_set.issubset(shards):
-                new = [p for p in shards if p not in known_set]
-                if not new:
-                    return table
-                table = pa.concat_tables([table, read_shards(new, TICK_SCHEMA)], promote_options="default")
-                self.reads += len(new)
-                self._days[trading_day] = (known + new, table)
-                return table
-        table = read_shards(shards, TICK_SCHEMA)
-        self.reads += len(shards)
-        self._days[trading_day] = (list(shards), table)
-        while len(self._days) > self._max_days:
-            del self._days[next(iter(self._days))]
-        return table
-
-
-def row_to_tick(r: Mapping[str, Any]) -> Tick | None:
-    """Rebuild a :class:`Tick` from a raw/canonical row (``None`` for rows without market data)."""
-    if _na(r.get("last")) or _na(r.get("volume")) or _na(r.get("exch_ts_ns")):
-        return None
-    return Tick(
-        instrument_id=str(r["instrument_id"]),
-        exchange=Exchange(str(r["exchange"])),
-        trading_day=str(r["trading_day"]),
-        action_day=str(r["action_day"]),
-        exch_ts_ns=int(r["exch_ts_ns"]),
-        last=float(r["last"]),
-        volume=int(r["volume"]),
-        turnover=_f(r.get("turnover")) or 0.0,
-        open_interest=_i(r.get("open_interest")) or 0,
-        bid1=_f(r.get("bid1")),
-        ask1=_f(r.get("ask1")),
-        bid_vol1=_i(r.get("bid_vol1")) or 0,
-        ask_vol1=_i(r.get("ask_vol1")) or 0,
-        open=_f(r.get("open")),
-        high=_f(r.get("high")),
-        low=_f(r.get("low")),
-        upper_limit=_f(r.get("upper_limit")) or 0.0,
-        lower_limit=_f(r.get("lower_limit")) or 0.0,
-        pre_settle=_f(r.get("pre_settle")) or 0.0,
-        pre_close=_f(r.get("pre_close")),
-        pre_open_interest=_i(r.get("pre_open_interest")),
-        avg_price=_f(r.get("avg_price")),
-        source=SourceId(str(r["source"])),
-        source_seq=_i(r.get("source_seq")),
-        recv_ns=_i(r.get("recv_ns")) or 0,
-        fingerprint=_i(r.get("fingerprint")) or 0,
-        flags=_i(r.get("flags")) or 0,
-    )
-
-
-def _na(v: Any) -> bool:
-    return v is None or (isinstance(v, float) and v != v) or v is pd.NA
-
-
-def _f(v: Any) -> float | None:
-    return None if _na(v) else float(v)
-
-
-def _i(v: Any) -> int | None:
-    return None if _na(v) else int(v)
-
-
-__all__ = [
-    "ShardCache",
-    "TickRecorder",
-    "build_canonical",
-    "canonical_fresh",
-    "canonical_path",
-    "day_shards",
-    "read_canonical",
-    "read_day_frame",
-    "reject_row",
-    "row_to_tick",
-    "tick_row",
-]
+__all__ = ["TickRecorder", "build_canonical", "canonical_fresh", "canonical_path", "day_shards", "read_canonical", "reject_row", "tick_row"]

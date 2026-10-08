@@ -20,7 +20,7 @@ class FeedBConfig(_Strict):
     enabled: bool = True
     url: str = "http://127.0.0.1:7002/v1/quotes"
     poll_ms: int = 1000
-    timeout_ms: int = 800
+    timeout_ms: int = 800  # read timeout of one poll (connect timeout: 1 s)
     priority: int = 2
 
 
@@ -41,15 +41,9 @@ class ArbitrationConfig(_Strict):
     exclude_reject_rate: float = 0.05
     exclude_integrity_votes: int = 2
     probation_healthy_s: float = 10.0
-    probation_agree_count: int = 3
     min_dwell_s: float = 5.0
-    flapping_window_s: float = 300.0
-    flapping_max_switches: int = 4
     reorder_buffer_max: int = 32
     reorder_buffer_ms: int = 100
-    spike_confirm_ms: int = 2000
-    spike_ticks: int = 10
-    spike_z: float = 6.0
     stale_s: float = 5.0
     unknown_s: float = 30.0
     open_grace_s: float = 30.0

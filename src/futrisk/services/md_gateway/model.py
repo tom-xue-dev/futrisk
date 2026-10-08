@@ -1,21 +1,20 @@
 """In-process data model of the md-gateway pipeline (01 §5.3.2, 02 §10).
 
-A source adapter turns every vendor record it receives into an :class:`Incoming`:
-either a normalized :class:`~futrisk.messages.md.Tick` or a normalization failure
-with its 02 §11.3 reason. The pipeline (validator → arbiter) then decides the
-:class:`~futrisk.messages.enums.TickMode` recorded for it (03 §5.1).
+A source adapter turns every vendor record into an :class:`Incoming`: a normalized
+:class:`~futrisk.messages.md.Tick`, or a normalization failure with its 02 §11.3 reason.
+The pipeline (validator → arbiter) then decides the :class:`~futrisk.messages.enums.TickMode`
+recorded for it (03 §5.1).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
-from futrisk.messages.enums import SourceId, TickMode
+from futrisk.messages.enums import SourceId
 from futrisk.messages.md import Tick
 
 OrderKey = tuple[str, int, int]
-"""``(trading_day, volume, exch_ts_ns)``: cross-source ordering key (01 §8.13)."""
+"""``(trading_day, volume, exch_ts_ns)``: the cross-source ordering key (01 §8.13)."""
 
 
 def order_key(tick: Tick) -> OrderKey:
@@ -26,10 +25,9 @@ def order_key(tick: Tick) -> OrderKey:
 class Incoming:
     """One received state (or a record that could not be normalized).
 
-    ``recv_ns`` is market time (runtime market clock, 01 §8.2); ``recv_mono_ns`` is the
-    ``perf_counter`` time of receipt used for latency statistics. ``replay`` marks Feed A
-    replays (in-connection or resume), ``snapshot`` states from a subscribe snapshot;
-    neither can ever be LIVE (01 §8.13).
+    ``recv_ns`` is market time (01 §8.2), ``recv_mono_ns`` the ``perf_counter`` time of
+    receipt (latency statistics). ``replay`` marks Feed A replays (in-connection or
+    resume), ``snapshot`` states of a subscribe snapshot; neither can ever be LIVE.
     """
 
     source: SourceId
@@ -54,14 +52,4 @@ class Incoming:
         return not self.replay and not self.snapshot
 
 
-@dataclass(slots=True)
-class Outcome:
-    """Final classification of one received state (what goes to the recorder)."""
-
-    incoming: Incoming
-    mode: TickMode
-    reason: str | None = None
-    detail: dict[str, Any] = field(default_factory=dict)
-
-
-__all__ = ["Incoming", "OrderKey", "Outcome", "order_key"]
+__all__ = ["Incoming", "OrderKey", "order_key"]

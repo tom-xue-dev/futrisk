@@ -8,7 +8,6 @@ import msgspec
 
 from futrisk.messages.base import Msg, payload
 from futrisk.messages.enums import (
-    BarQuality,
     Exchange,
     GapStatus,
     LimitLock,
@@ -18,7 +17,6 @@ from futrisk.messages.enums import (
     SettleMethod,
     SourceId,
     SourceState,
-    TickMode,
 )
 
 # Tick.flags bits
@@ -26,8 +24,8 @@ FLAG_COARSE_TS = 1 << 0
 FLAG_AUCTION = 1 << 1
 FLAG_LIMIT_UP_LOCKED = 1 << 2
 FLAG_LIMIT_DOWN_LOCKED = 1 << 3
-#: md-gateway rolled its watermark back (``MD_INTEGRITY`` ``action=WM_ROLLBACK``): this LIVE tick may carry an
-#: ``order_key`` not greater than the previous one and must be applied anyway (consumers reset their ordering)
+#: reserved: a LIVE tick that consumers must apply whatever its ``order_key`` (the slim md-gateway never
+#: rolls its watermark back, so it never sets it; consumers keep honouring it)
 FLAG_WM_RESET = 1 << 4
 
 
@@ -65,22 +63,6 @@ class Tick(Msg, kw_only=True):
     def order_key(self) -> tuple[str, int, int]:
         """(trading_day, volume, exch_ts_ns): cross-source ordering key (01 §8.13)."""
         return (self.trading_day, self.volume, self.exch_ts_ns)
-
-
-@payload()
-class Bar(Msg, kw_only=True):
-    instrument_id: str
-    trading_day: str
-    minute_start_ns: int
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-    turnover: float
-    open_interest: int
-    quality: BarQuality = BarQuality.OK
-    version: int = 1
 
 
 class SourceStatus(msgspec.Struct, kw_only=True, omit_defaults=True):
@@ -191,34 +173,6 @@ class MdEventsQuery(Msg, kw_only=True):
 @payload()
 class MdEventBatch(Msg, kw_only=True):
     items: list[MdEvent]
-
-
-@payload()
-class TicksQuery(Msg, kw_only=True):
-    instrument_id: str
-    trading_day: str
-    from_ns: int
-    to_ns: int
-    modes: list[TickMode] | None = None
-
-
-@payload()
-class TickBatch(Msg, kw_only=True):
-    ticks: list[Tick]
-    next_from_ns: int | None = None
-
-
-@payload()
-class BarsRequest(Msg, kw_only=True):
-    instrument_id: str
-    trading_day: str
-    from_ns: int | None = None
-    to_ns: int | None = None
-
-
-@payload()
-class BarsBatch(Msg, kw_only=True):
-    bars: list[Bar]
 
 
 @payload()

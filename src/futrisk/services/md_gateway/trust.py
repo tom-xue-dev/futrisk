@@ -1,36 +1,13 @@
 """Source trust states TRUSTED / PROBATION / EXCLUDED (01 §8.13 仲裁规则与参数).
 
-=====================================  ===================================================
-transition                             condition (``feeds.yaml`` arbitration parameters)
-=====================================  ===================================================
-TRUSTED/PROBATION -> EXCLUDED          disconnect (or ``exclude_missed_heartbeats``
-                                       missed); ``exclude_failed_polls`` failed polls in
-                                       a row; reject rate over the last minute above
-                                       ``exclude_reject_rate`` (with a minimum sample);
-                                       ``exclude_integrity_votes`` cross-check votes;
-                                       manual ``md.source.set EXCLUDE``. Immediate.
-EXCLUDED -> PROBATION                  connected again (``重连成功``), healthy, not
-                                       manually excluded, after ``min_dwell_s``
-PROBATION -> TRUSTED                   healthy for ``probation_healthy_s`` and caught up
-                                       with the watermark and gap-free (Feed A) and
-                                       ``probation_agree_count`` same-volume agreements
-                                       with a trusted source, after ``min_dwell_s``
-bootstrap (no TRUSTED source at all)   the highest-priority PROBATION source meeting
-                                       everything but the agreements is promoted
-                                       directly (``detail.bootstrap = true``)
-=====================================  ===================================================
-
-**Reject rate per instrument** (C1): outcomes are counted per ``(source, instrument)``.
-The source-level rate that can exclude a source is computed **without its worst
-instrument** (unless it delivers a single one), so one broken contract - 1 of 13
-instruments is already 7.7 % of a source's states - never excludes a whole source; two
-or more bad contracts still do. ``SourceStatus.reject_rate`` reports the plain rate.
-
-Exclusions are never delayed (safety first); ``min_dwell_s`` only delays promotions, so
-a flapping source cannot oscillate faster than the dwell. More than
-``flapping_max_switches`` transitions within ``flapping_window_s`` raise ``MD_FLAPPING``
-once per window. Promotion checks run on the service timer. A manual EXCLUDE pin is
-persisted (``md_events``) and restored at start-up (:meth:`TrustManager.restore_manual`).
+Exclusion (from TRUSTED or PROBATION, immediate): disconnect or ``exclude_missed_heartbeats``
+missed; ``exclude_failed_polls`` failed polls in a row; reject rate over the last minute above
+``exclude_reject_rate`` (with a minimum sample); ``exclude_integrity_votes`` cross-check votes;
+manual ``md.source.set EXCLUDE`` (persisted in ``md_events`` and restored at start-up).
+EXCLUDED -> PROBATION once connected again, healthy, not pinned and after ``min_dwell_s``;
+PROBATION -> TRUSTED after ``probation_healthy_s`` healthy, caught up with the watermark and
+gap-free (Feed A), after the dwell. Exclusions are never delayed; the dwell only delays
+promotions, so a flapping source cannot oscillate faster than it. Promotions run on the timer.
 """
 
 from __future__ import annotations
@@ -48,14 +25,13 @@ NS = 1_000_000_000
 
 @dataclass
 class TrustChange:
-    """One state transition (-> ``SOURCE_STATE`` event) or a flapping alert (-> ``MD_FLAPPING``)."""
+    """One state transition (-> ``SOURCE_STATE`` event)."""
 
     source: SourceId
     from_state: SourceState
     to_state: SourceState
     reason: str
     detail: dict[str, Any] = field(default_factory=dict)
-    flapping: bool = False
     ts_ns: int = 0
 
 
@@ -75,14 +51,9 @@ class SourceTrust:
     manual_detail: dict[str, Any] = field(default_factory=dict)
     exclude_reason: str = "not connected"
     failures: int = 0
-    agreements: set[tuple[str, int]] = field(default_factory=set)
     votes: deque[int] = field(default_factory=deque)
-    outcomes: deque[tuple[int, str, bool]] = field(default_factory=deque)
+    outcomes: deque[tuple[int, bool]] = field(default_factory=deque)
     rejects_in_window: int = 0
-    inst_outcomes: dict[str, int] = field(default_factory=dict)
-    inst_rejects: dict[str, int] = field(default_factory=dict)
-    transitions: deque[int] = field(default_factory=deque)
-    flapping_until_mono: int = 0
     last_msg_ns: int | None = None
     last_msg_mono: int | None = None
     lag_ms: float | None = None
@@ -90,33 +61,11 @@ class SourceTrust:
     msgs_per_s: float = 0.0
     rate_mark: tuple[int, int] | None = None
     epoch: str | None = None
-    last_seq: int | None = None
     integrity_votes_total: int = 0
 
     def reject_rate(self) -> float:
         n = len(self.outcomes)
         return self.rejects_in_window / n if n else 0.0
-
-    def worst_instrument(self) -> tuple[str | None, int, int]:
-        """``(instrument, rejects, outcomes)`` of the instrument with the most rejects in the window."""
-        best: tuple[str | None, int, int] = (None, 0, 0)
-        for iid, rej in self.inst_rejects.items():
-            if rej > best[1]:
-                best = (iid, rej, self.inst_outcomes.get(iid, 0))
-        return best
-
-    def gating_rate(self, min_samples: int) -> tuple[float, int]:
-        """Reject rate that can exclude the source: without its worst instrument when it delivers several.
-
-        Returns ``(rate, sample)``; the caller needs ``sample >= min_samples`` to act on it.
-        """
-        n = len(self.outcomes)
-        rej = self.rejects_in_window
-        worst, w_rej, w_n = self.worst_instrument()
-        if worst is not None and len(self.inst_outcomes) > 1:
-            n -= w_n
-            rej -= w_rej
-        return (rej / n if n > 0 else 0.0), n
 
 
 class TrustManager:
@@ -215,22 +164,14 @@ class TrustManager:
         if st is None:
             return
         now = self._mono()
-        st.outcomes.append((now, instrument_id, rejected))
-        st.inst_outcomes[instrument_id] = st.inst_outcomes.get(instrument_id, 0) + 1
+        st.outcomes.append((now, rejected))
         if rejected:
             st.rejects_in_window += 1
-            st.inst_rejects[instrument_id] = st.inst_rejects.get(instrument_id, 0) + 1
         if len(st.outcomes) & 63 == 0 or rejected:
             self._trim_outcomes(st, now)
         if rejected and st.state is not SourceState.EXCLUDED and self._rate_bad(st):
             st.healthy_since_mono = None
-            rate, n = st.gating_rate(self._p.reject_min_samples)
-            worst = st.worst_instrument()
-            self._exclude(
-                st,
-                "reject_rate",
-                {"reject_rate": round(rate, 4), "window": n, "worst_instrument": worst[0], "worst_rejects": worst[1]},
-            )
+            self._exclude(st, "reject_rate", {"reject_rate": round(st.reject_rate(), 4), "window": len(st.outcomes)})
 
     def on_vote(self, source: SourceId, detail: dict[str, Any] | None = None) -> None:
         """Cross-check vote against ``source`` (01 §8.13 被交叉校验投票)."""
@@ -249,25 +190,7 @@ class TrustManager:
             st.votes.clear()
             self._exclude(st, "integrity_votes", {"votes": votes, **(detail or {})})
 
-    def on_agreement(self, source: SourceId, key: tuple[str, int]) -> None:
-        st = self.sources.get(source)
-        if st is not None and st.state is SourceState.PROBATION:
-            st.agreements.add(key)
-
-    def set_seq(self, source: SourceId, epoch: str | None, last_seq: int | None) -> None:
-        st = self.sources[source]
-        st.epoch, st.last_seq = epoch, last_seq
-
     # ------------------------------------------------------------------ manual
-    def preview_manual(self, source: SourceId, action: str) -> tuple[SourceState, SourceState]:
-        """``(from, to)`` state that :meth:`manual` would produce now (for the command's event)."""
-        st = self.sources[source]
-        if action == "EXCLUDE":
-            return st.state, SourceState.EXCLUDED
-        if st.state is SourceState.EXCLUDED and st.connected:
-            return st.state, SourceState.PROBATION
-        return st.state, st.state
-
     def manual(self, source: SourceId, action: str, actor: str, reason: str) -> TrustChange:
         """``md.source.set`` (02 §6.2): EXCLUDE pins EXCLUDED; INCLUDE lifts the pin (-> PROBATION if connected)."""
         st = self.sources[source]
@@ -276,10 +199,9 @@ class TrustManager:
         if action == "EXCLUDE":
             st.manual = True
             st.manual_detail = detail
-            if st.state is not SourceState.EXCLUDED:
-                st.exclude_reason = "manual_exclude"
-                return self._transition(st, SourceState.EXCLUDED, "manual_exclude", detail, emit=False)
             st.exclude_reason = "manual_exclude"
+            if st.state is not SourceState.EXCLUDED:
+                return self._transition(st, SourceState.EXCLUDED, "manual_exclude", detail, emit=False)
         else:
             st.manual = False
             st.manual_detail = {}
@@ -290,7 +212,7 @@ class TrustManager:
         return TrustChange(source, before, st.state, f"manual_{action.lower()}", {**detail, "changed": False}, ts_ns=self._now())
 
     def restore_manual(self, pins: dict[SourceId, dict[str, Any]]) -> None:
-        """Re-apply the manual EXCLUDE pins persisted before a restart (M4)."""
+        """Re-apply the manual EXCLUDE pins persisted before a restart."""
         for source, detail in pins.items():
             st = self.sources.get(source)
             if st is None:
@@ -300,71 +222,35 @@ class TrustManager:
             st.exclude_reason = "manual_exclude"
 
     # ------------------------------------------------------------------ timer
-    def evaluate(
-        self,
-        *,
-        caught_up: Callable[[SourceId], bool],
-        complete: Callable[[SourceId], bool],
-    ) -> None:
-        """Periodic checks: reject-rate recovery, promotions, bootstrap (01 §8.13)."""
+    def evaluate(self, *, caught_up: Callable[[SourceId], bool], complete: Callable[[SourceId], bool]) -> None:
+        """Periodic checks: reject-rate recovery and promotions (01 §8.13)."""
         now = self._mono()
         for st in self.sources.values():
             self._trim_outcomes(st, now)
             if st.connected and st.healthy_since_mono is None and not self._rate_bad(st):
                 st.healthy_since_mono = now  # the health clock restarts after the last problem
-        # EXCLUDED -> PROBATION
-        for st in self.sources.values():
-            if st.state is SourceState.EXCLUDED and st.connected and not st.manual and self._dwell_ok(st, now):
-                if self._rate_bad(st) or st.healthy_since_mono is None:
+            if st.manual or not st.connected or not self._dwell_ok(st, now) or st.healthy_since_mono is None:
+                continue
+            if st.state is SourceState.EXCLUDED:
+                if not self._rate_bad(st):
+                    self._transition(st, SourceState.PROBATION, "reconnected", {"after": st.exclude_reason})
+            elif st.state is SourceState.PROBATION:
+                if now - st.healthy_since_mono < self._p.probation_ns or self._rate_bad(st):
                     continue
-                self._transition(st, SourceState.PROBATION, "reconnected", {"after": st.exclude_reason})
-        # PROBATION -> TRUSTED
-        eligible: list[SourceTrust] = []
-        for st in self.sources.values():
-            if st.state is not SourceState.PROBATION or not st.connected or st.manual:
-                continue
-            if not self._dwell_ok(st, now) or st.healthy_since_mono is None:
-                continue
-            if now - st.healthy_since_mono < self._p.probation_ns or self._rate_bad(st):
-                continue
-            if not complete(st.source) or not caught_up(st.source):
-                continue
-            eligible.append(st)
-        if not eligible:
-            return
-        if self.any_trusted():
-            for st in eligible:
-                if len(st.agreements) >= self._p.arb.probation_agree_count:
-                    self._transition(st, SourceState.TRUSTED, "probation_passed", {"agreements": len(st.agreements)})
-        else:
-            # 自举：当前没有任何可信源时，优先级最高的合格 PROBATION 源直接升为 TRUSTED
-            best = min(eligible, key=lambda s: s.priority)
-            self._transition(best, SourceState.TRUSTED, "bootstrap", {"bootstrap": True, "agreements": len(best.agreements)})
+                if complete(st.source) and caught_up(st.source):
+                    self._transition(st, SourceState.TRUSTED, "probation_passed", {})
 
     # --------------------------------------------------------------- internals
     def _trim_outcomes(self, st: SourceTrust, now: int) -> None:
         horizon = now - int(self._p.reject_window_s * NS)
         outcomes = st.outcomes
         while outcomes and outcomes[0][0] < horizon:
-            _, iid, rej = outcomes.popleft()
-            left = st.inst_outcomes.get(iid, 1) - 1
-            if left > 0:
-                st.inst_outcomes[iid] = left
-            else:
-                st.inst_outcomes.pop(iid, None)
+            _, rej = outcomes.popleft()
             if rej:
                 st.rejects_in_window -= 1
-                r = st.inst_rejects.get(iid, 1) - 1
-                if r > 0:
-                    st.inst_rejects[iid] = r
-                else:
-                    st.inst_rejects.pop(iid, None)
 
     def _rate_bad(self, st: SourceTrust) -> bool:
-        if len(st.outcomes) < self._p.reject_min_samples:
-            return False
-        rate, n = st.gating_rate(self._p.reject_min_samples)
-        return n >= self._p.reject_min_samples and rate > self._p.arb.exclude_reject_rate
+        return len(st.outcomes) >= self._p.reject_min_samples and st.reject_rate() > self._p.arb.exclude_reject_rate
 
     def _dwell_ok(self, st: SourceTrust, now: int) -> bool:
         return st.initial or now - st.since_mono >= self._p.dwell_ns
@@ -385,7 +271,6 @@ class TrustManager:
         st.since_mono = now
         st.since_ns = self._now()
         st.initial = False
-        st.agreements.clear()
         if to is SourceState.EXCLUDED:
             st.votes.clear()
         if to is SourceState.PROBATION and st.healthy_since_mono is None and st.connected:
@@ -393,23 +278,6 @@ class TrustManager:
         change = TrustChange(st.source, before, to, reason, dict(detail), ts_ns=st.since_ns)
         if emit:
             self._on_change(change)
-        st.transitions.append(now)
-        horizon = now - self._p.flapping_window_ns
-        while st.transitions and st.transitions[0] < horizon:
-            st.transitions.popleft()
-        if len(st.transitions) > self._p.arb.flapping_max_switches and now >= st.flapping_until_mono:
-            st.flapping_until_mono = now + self._p.flapping_window_ns
-            self._on_change(
-                TrustChange(
-                    st.source,
-                    before,
-                    to,
-                    "flapping",
-                    {"switches": len(st.transitions), "window_s": self._p.arb.flapping_window_s},
-                    flapping=True,
-                    ts_ns=st.since_ns,
-                )
-            )
         return change
 
 

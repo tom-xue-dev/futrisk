@@ -47,22 +47,13 @@ class MdEventKind(StrEnum):
     MD_RECOVERED = "MD_RECOVERED"
     MD_QUIET = "MD_QUIET"
     MD_INTEGRITY = "MD_INTEGRITY"
-    MD_FLAPPING = "MD_FLAPPING"
     BAD_TICK = "BAD_TICK"
-    QUARANTINE_CONFIRMED = "QUARANTINE_CONFIRMED"
-    QUARANTINE_DROPPED = "QUARANTINE_DROPPED"
 
 
 class GapStatus(StrEnum):
     OPEN = "OPEN"
     FILLED = "FILLED"
     UNRECOVERABLE = "UNRECOVERABLE"
-
-
-class BarQuality(StrEnum):
-    OK = "OK"
-    GAP_FILLED = "GAP_FILLED"
-    GAP_UNFILLED = "GAP_UNFILLED"
 
 
 class LimitLock(StrEnum):
@@ -302,7 +293,6 @@ class ReconBreakStatus(StrEnum):
 class TickMode(StrEnum):
     LIVE = "LIVE"
     BACKFILL = "BACKFILL"
-    QUARANTINED = "QUARANTINED"
     REJECTED = "REJECTED"
     DUPLICATE = "DUPLICATE"
 

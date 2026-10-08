@@ -11,7 +11,6 @@ FACT = "FACT"
 
 # topic templates -> reliability class
 MD_TICK = "md.tick."
-MD_BAR_1M = "md.bar.1m."
 MD_STATUS = "md.status"
 MD_EVENT = "md.event"
 TD_EXEC = "td.exec."
@@ -65,10 +64,6 @@ def is_fact(topic: str) -> bool:
 
 def md_tick(instrument_id: str) -> str:
     return f"{MD_TICK}{instrument_id}"
-
-
-def md_bar_1m(instrument_id: str) -> str:
-    return f"{MD_BAR_1M}{instrument_id}"
 
 
 def td_exec(account_id: str) -> str:

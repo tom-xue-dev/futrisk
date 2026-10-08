@@ -34,15 +34,9 @@ arbitration:
   exclude_reject_rate: 0.05
   exclude_integrity_votes: 2
   probation_healthy_s: 10
-  probation_agree_count: 3
   min_dwell_s: 5
-  flapping_window_s: 300
-  flapping_max_switches: 4
   reorder_buffer_max: 32
   reorder_buffer_ms: 100
-  spike_confirm_ms: 2000
-  spike_ticks: 10
-  spike_z: 6.0
   stale_s: 5
   unknown_s: 30
   open_grace_s: 30

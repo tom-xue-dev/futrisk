@@ -8,7 +8,6 @@
  * precision in JavaScript, which is irrelevant for display.
  */
 import type {
-  BarQuality,
   Exchange,
   GapStatus,
   LimitLock,
@@ -49,22 +48,6 @@ export interface Tick {
   recv_ns: number
   fingerprint?: number
   flags?: number
-}
-
-/** `md.bar.1m.{instrument_id}` payload. */
-export interface Bar {
-  instrument_id: string
-  trading_day: string
-  minute_start_ns: number
-  open: number
-  high: number
-  low: number
-  close: number
-  volume: number
-  turnover: number
-  open_interest: number
-  quality?: BarQuality
-  version?: number
 }
 
 export interface SourceStatus {

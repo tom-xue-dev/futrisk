@@ -17,7 +17,7 @@ from futrisk.common.config import FullConfig
 from futrisk.common.config.feeds import ArbitrationConfig
 from futrisk.messages.base import decode
 from futrisk.messages.enums import SourceId
-from futrisk.messages.envelope import Envelope, decode_envelope
+from futrisk.messages.envelope import decode_envelope
 from futrisk.messages.md import MdEvent, MdStatus, Tick
 from futrisk.runtime import AsyncServiceRuntime
 from futrisk.runtime.testing import config_with_free_ports
@@ -60,8 +60,8 @@ def fast_params(**arb: Any) -> MdParams:
         "open_grace_s": 1.0,
     }
     base.update(arb)
-    # the start-up grace covers connect + bootstrap (probation 1 s + dwell), like 30 s vs 10 s in production
-    return MdParams(arb=ArbitrationConfig(**base), startup_grace_s=5.0, raw_roll_s=1.0, record_handoff_s=0.1, bar_close_grace_s=1.0)
+    # the start-up grace covers connect + probation + dwell, like 30 s vs 10 s in production
+    return MdParams(arb=ArbitrationConfig(**base), startup_grace_s=5.0, raw_roll_s=1.0, record_handoff_s=0.1)
 
 
 async def start_md(
@@ -83,7 +83,7 @@ async def start_md(
 class Collector:
     """SUB socket on md-gateway's PUB: keeps every md.tick / md.event / md.status envelope."""
 
-    def __init__(self, endpoint: str, prefixes: tuple[str, ...] = ("md.tick.", "md.event", "md.status", "md.bar.1m.")) -> None:
+    def __init__(self, endpoint: str, prefixes: tuple[str, ...] = ("md.tick.", "md.event", "md.status")) -> None:
         self.ctx = zmq.asyncio.Context()
         self.sock = self.ctx.socket(zmq.SUB)
         self.sock.setsockopt(zmq.RCVHWM, 0)
@@ -93,7 +93,6 @@ class Collector:
         self.ticks: list[Tick] = []
         self.events: list[MdEvent] = []
         self.status: MdStatus | None = None
-        self.bars: list[Envelope] = []
         self._task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
@@ -106,8 +105,6 @@ class Collector:
                 self.events.append(decode(env.payload, MdEvent))
             elif env.type == "MdStatus":
                 self.status = decode(env.payload, MdStatus)
-            elif env.type == "Bar":
-                self.bars.append(env)
 
     def events_of(self, kind: str, instrument_id: str | None = None) -> list[MdEvent]:
         return [e for e in self.events if str(e.kind) == kind and (instrument_id is None or e.instrument_id == instrument_id)]

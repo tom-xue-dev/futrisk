@@ -10,8 +10,8 @@ so that a first start does not resend history, 02 §4.5):
   are each notified once); likewise the decision on a liquidation plan
   (``LIQUIDATION_PLAN`` with ``detail.status`` CONFIRMED / CANCELED / EXPIRED)
   when the plan's creation was notified;
-* ``md.event`` kinds ``MD_DOWN`` (HIGH), ``MD_INTEGRITY`` by ``detail.action`` (VOTE and
-  WM_ROLLBACK HIGH, HOLD WARNING; RELEASE / EVICT / NO_VOTE not notified),
+* ``md.event`` kinds ``MD_DOWN`` (HIGH), ``MD_INTEGRITY`` by ``detail.action`` (VOTE
+  HIGH; NO_VOTE not notified),
   ``GAP_UNRECOVERABLE`` (WARNING);
 * ``sys.eod`` phase ``FAILED`` -> kind ``EOD_FAILED`` (CRITICAL); ``sys.eod``
   WARN events (``detail.warning``, ``detail.kind`` in ``LATE_FACT`` /
@@ -94,8 +94,6 @@ MD_NOTIFY: Mapping[MdEventKind, Severity] = {
 #: MD_INTEGRITY notification severity by md-gateway's ``detail.action`` (absent = VOTE)
 MD_INTEGRITY_ACTIONS: Mapping[str, Severity] = {
     "VOTE": Severity.HIGH,
-    "WM_ROLLBACK": Severity.HIGH,
-    "HOLD": Severity.WARNING,
 }
 # lifecycle events of an alert: notified when the raise of the same alert was (02 §9.8)
 LIFECYCLE_KINDS = frozenset({RiskEventKind.ALERT_CLEARED, RiskEventKind.ALERT_ACKED, RiskEventKind.RESET})
@@ -246,9 +244,8 @@ def build_notification(body: Msg, *, min_severity: Severity = Severity.HIGH) -> 
         md_kind = MdEventKind(str(body.kind))
         md_sev = MD_NOTIFY.get(md_kind)
         if md_kind == MdEventKind.MD_INTEGRITY:
-            # by the arbitration step (md-gateway detail.action): a source proven wrong or a watermark
-            # roll-back is HIGH, a held instrument WARNING; releases, evictions and no-vote outcomes
-            # are routine bookkeeping and not notified
+            # by the arbitration step (md-gateway detail.action): a source voted against is HIGH; a
+            # disagreement between two trusted sources (NO_VOTE) is routine bookkeeping and not notified
             action = str((body.detail or {}).get("action") or "VOTE")
             md_sev = MD_INTEGRITY_ACTIONS.get(action)
         if md_sev is None:

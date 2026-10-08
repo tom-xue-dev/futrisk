@@ -1,21 +1,13 @@
 """``md.event`` facts and the gap ledger (02 §5, §7.1 MdEvent/GapInfo, 03 §4.1 md_events/gaps, §7).
 
-:class:`EventLog` builds :class:`MdEvent` payloads (UUIDv7 ``event_id``, market-time
-``ts_ns``) and hands them to a persister that writes ``md_events`` (+ ``gaps``) and the
-outbox row of ``md.event`` in **one** transaction; the FACT is published after the
-commit. :class:`GapBook` keeps the open/closed gaps (``GAP_OPEN`` → ``GAP_FILLED`` /
-``GAP_UNRECOVERABLE``) and answers "did a data gap overlap this interval?" for the bar
-builder. :class:`RateLimiter` throttles informational events (``BAD_TICK``,
-``MD_INTEGRITY``) per key.
-
-Gap ids (02 §7.1 ``GapInfo``): Feed A sequence gaps ``feed_a:{epoch}:{from_seq}-{to_seq}``;
-time-window gaps ``{source lower | all}:{from_ns}`` - ``all:`` (``source = null``) while no
-TRUSTED source is left during market hours, closed at the next bootstrap; ``feed_b:`` /
-``sina:`` while a polled source cannot be polled. The ``from_ns`` / ``to_ns`` of time-window
-gaps are **receive times** in market time (when the loss was noticed / ended), not
-exchange times: the exchange time of the last state before the gap is not known for every
-instrument. Bars only degrade for gaps of the data they are built from: ``all:`` gaps
-and Feed A sequence gaps (a polled source's own outage is covered by the others).
+:class:`EventLog` builds :class:`MdEvent` payloads (UUIDv7 ``event_id``, market-time ``ts_ns``)
+and hands them to a persister that writes ``md_events`` (+ ``gaps``) and the outbox row of
+``md.event`` in one transaction. :class:`GapBook` keeps the open / closed gaps (``GAP_OPEN`` ->
+``GAP_FILLED`` / ``GAP_UNRECOVERABLE``); :class:`RateLimiter` throttles informational events
+per key. Gap ids: Feed A sequence gaps ``feed_a:{epoch}:{from_seq}-{to_seq}``; time-window gaps
+``{source lower | all}:{from_ns}`` (``all:`` while no TRUSTED source is left in market hours,
+``feed_b:`` / ``sina:`` while a polled source cannot be polled), whose ``from_ns`` / ``to_ns``
+are receive times in market time.
 """
 
 from __future__ import annotations
@@ -51,13 +43,7 @@ Persister = Callable[[MdEvent, GapRecord | None, str | None], None]
 class EventLog:
     """Creates ``md.event`` facts and forwards them to the persister (DB + outbox)."""
 
-    def __init__(
-        self,
-        persist: Persister,
-        *,
-        now_ns: Callable[[], int],
-        trading_day: Callable[[], str],
-    ) -> None:
+    def __init__(self, persist: Persister, *, now_ns: Callable[[], int], trading_day: Callable[[], str]) -> None:
         self._persist = persist
         self._now = now_ns
         self._td = trading_day
@@ -145,13 +131,7 @@ class GapBook:
         if rec is not None and rec.info.status == GapStatus.OPEN:
             return rec
         info = GapInfo(
-            gap_id=gap_id,
-            source=source,
-            epoch=epoch,
-            from_seq=from_seq,
-            to_seq=to_seq,
-            from_ns=from_ns,
-            to_ns=to_ns,
+            gap_id=gap_id, source=source, epoch=epoch, from_seq=from_seq, to_seq=to_seq, from_ns=from_ns, to_ns=to_ns,
             status=GapStatus.OPEN,
         )
         rec = GapRecord(info, trading_day, self._now())
@@ -182,13 +162,8 @@ class GapBook:
         now = self._now()
         if rec is None:
             info = GapInfo(
-                gap_id=gap_id,
-                source=source,
-                epoch=epoch,
-                from_seq=from_seq,
-                to_seq=to_seq,
-                from_ns=from_ns if from_ns is not None else now,
-                to_ns=to_ns,
+                gap_id=gap_id, source=source, epoch=epoch, from_seq=from_seq, to_seq=to_seq,
+                from_ns=from_ns if from_ns is not None else now, to_ns=to_ns,
             )
             rec = GapRecord(info, trading_day or "", now)
             self.gaps[gap_id] = rec
@@ -224,24 +199,6 @@ class GapBook:
                 return g
         return None
 
-    def overlap(self, from_ns: int, to_ns: int) -> GapStatus | None:
-        """Worst status of the data gaps overlapping ``[from_ns, to_ns)``: OPEN/UNRECOVERABLE > FILLED.
-
-        Only ``all:`` gaps and Feed A sequence gaps count (the data bars are built from).
-        """
-        worst: GapStatus | None = None
-        now = self._now()
-        for g in self.gaps.values():
-            info = g.info
-            if info.source is not None and info.from_seq is None:
-                continue  # a polled source's own outage: the other sources covered the window
-            g_to = info.to_ns if info.to_ns is not None else now
-            if info.from_ns < to_ns and g_to >= from_ns:
-                if info.status != GapStatus.FILLED:
-                    return info.status
-                worst = GapStatus.FILLED
-        return worst
-
     def _trim(self) -> None:
         closed = [k for k, g in self.gaps.items() if g.info.status != GapStatus.OPEN]
         for k in closed[: max(0, len(closed) - self._keep)]:
@@ -252,9 +209,9 @@ class GapBook:
 class RateLimiter:
     """At most one event per key and interval; counts what was suppressed.
 
-    The key set is bounded (``max_keys``, L4): keys come partly from vendor data (instrument
-    ids of malformed records), so expired keys are purged when the bound is reached and,
-    if every key is still live, the oldest ones are forgotten (``evicted`` counts them).
+    The key set is bounded (``max_keys``): keys come partly from vendor data (instrument ids
+    of malformed records), so expired keys are purged when the bound is reached and, if
+    every key is still live, the oldest ones are forgotten (``evicted`` counts them).
     """
 
     interval_ns: int

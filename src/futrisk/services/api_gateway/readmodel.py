@@ -6,7 +6,7 @@ to the summary topics of 02 §4.1 and by the heartbeat observer:
 =====================  ==============================================================
 publisher              topics
 =====================  ==============================================================
-md-gateway             ``md.tick.``, ``md.bar.1m.``, ``md.status``, ``md.event``
+md-gateway             ``md.tick.``, ``md.status``, ``md.event``
 trade-gateway          ``td.exec.``, ``td.status``
 risk-engine-k          ``risk.`` (snapshot/state/event/firm/control.firm/cash), ``oms.order.``, ``sys.dayroll``
 clearing-worker        ``sys.eod``, ``clearing.settled``, ``report.ready``, ``backtest.status``
@@ -94,7 +94,7 @@ from futrisk.messages.enums import (
 )
 from futrisk.messages.envelope import Envelope, open_payload
 from futrisk.messages.eod import BacktestStatus, DayRoll, EodPhaseEvent, ReportReady, SettlementCompleted
-from futrisk.messages.md import FLAG_WM_RESET, Bar, MdEvent, MdStatus, Tick
+from futrisk.messages.md import FLAG_WM_RESET, MdEvent, MdStatus, Tick
 from futrisk.messages.orders import BrokerOrderUpdate, BrokerStatus, OrderUpdate, Trade
 from futrisk.messages.risk import (
     AccountSnapshot,
@@ -110,7 +110,6 @@ from futrisk.messages.system import Heartbeat, ServiceStateChanged
 
 # Change kinds delivered to listeners
 TICK = "tick"
-BAR = "bar"
 MD_STATUS = "md_status"
 MD_EVENT = "md_event"
 SNAPSHOT = "snapshot"
@@ -213,7 +212,6 @@ class ReadModel:
         self.stats = ReadModelStats()
         # market data
         self.ticks: dict[str, Tick] = {}
-        self.bars: dict[str, Bar] = {}
         self.md_status: MdStatus | None = None
         self.md_events: deque[MdEvent] = deque(maxlen=MAX_MD_EVENTS)
         # risk
@@ -285,9 +283,6 @@ class ReadModel:
         topic = env.topic
         if isinstance(body, Tick):
             self._on_tick(body)
-        elif isinstance(body, Bar):
-            self.bars[body.instrument_id] = body
-            self._emit(BAR, body.instrument_id, body)
         elif isinstance(body, MdStatus):
             self.md_status = body
             self._emit(MD_STATUS, None, body)
@@ -998,7 +993,6 @@ class ReadModel:
 
 __all__ = [
     "BACKTEST",
-    "BAR",
     "BROKER_ORDER",
     "CASH",
     "DAYROLL",

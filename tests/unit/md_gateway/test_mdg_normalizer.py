@@ -207,10 +207,21 @@ def test_typed_fast_path_equals_the_dict_path(normalizer: Normalizer) -> None:
 
 
 def test_fast_fingerprint_matches_the_shared_algorithm() -> None:
+    """02 §7.1: msgpack of the normalized 9-element list, BLAKE2b with an 8-byte digest, big-endian unsigned."""
+    import hashlib
     import random
 
-    from futrisk.marketdata.fingerprint import compute_fingerprint
+    import msgspec
+
     from futrisk.services.md_gateway.normalizer import fast_fingerprint
+
+    def compute_fingerprint(**kw: Any) -> int:
+        def norm(v: float | None, d: int) -> float | None:
+            return None if v is None else (round(float(v), d) or 0.0)
+
+        key = [str(kw["trading_day"]), int(kw["volume"]), norm(kw["turnover"], 2), int(kw["open_interest"]), norm(kw["last"], 6),
+               norm(kw["bid1"], 6), norm(kw["ask1"], 6), int(kw["bid_vol1"]), int(kw["ask_vol1"])]
+        return int.from_bytes(hashlib.blake2b(msgspec.msgpack.encode(key), digest_size=8).digest(), "big")
 
     rng = random.Random(7)
     for _ in range(500):

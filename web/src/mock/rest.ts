@@ -37,7 +37,7 @@ const STATUS_OF: Record<string, number> = {
   TIMEOUT: 504,
 }
 /** business outcomes: HTTP 200 with ok=false */
-const OUTCOME_PREFIXES = ['REJECT_', 'MD_REJECT_', 'MD_QUARANTINE_', 'BROKER_', 'ROUTE_']
+const OUTCOME_PREFIXES = ['REJECT_', 'MD_REJECT_', 'BROKER_', 'ROUTE_']  // = api_gateway/rest.py BUSINESS_PREFIXES
 const MAX_BODY_BYTES = 1024 * 1024
 
 /** `rest.http_status` */

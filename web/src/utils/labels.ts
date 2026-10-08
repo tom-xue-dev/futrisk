@@ -279,7 +279,7 @@ export const REJECT_CODE_LABELS: Record<string, string> = {
   BROKER_ORDER_FINISHED: '柜台：委托已终结',
 }
 
-/** Market-data validation codes (md-gateway, 02 §11.3): reasons of rejected / quarantined ticks. */
+/** Market-data validation codes (md-gateway, 02 §11.3): reasons of rejected ticks. */
 export const MD_CODE_LABELS: Record<string, string> = {
   MD_REJECT_TRADING_DAY: '交易日不符',
   MD_REJECT_OUT_OF_SESSION: '不在交易时段',
@@ -287,10 +287,9 @@ export const MD_CODE_LABELS: Record<string, string> = {
   MD_REJECT_OFF_TICK: '价格不在最小变动价位上',
   MD_REJECT_NON_MONOTONIC: '成交量 / 时间倒退',
   MD_REJECT_PRICE_WITHOUT_TRADE: '无成交却变价',
-  MD_REJECT_VOLUME_JUMP: '成交量跳变',
   MD_REJECT_MALFORMED: '报文格式错误',
   MD_REJECT_FUTURE_TS: '时间戳超前',
-  MD_QUARANTINE_SPIKE: '价格尖刺，进入隔离',
+  MD_REJECT_INTEGRITY: '与另一可信源同成交量不同价',
 }
 
 /** Generic Reply codes (02 §11.1) for error toasts. */
@@ -343,10 +342,7 @@ export const MD_EVENT_LABELS: Record<MdEventKind, string> = {
   MD_RECOVERED: '行情恢复',
   MD_QUIET: '行情静默',
   MD_INTEGRITY: '交叉校验不一致',
-  MD_FLAPPING: '切换抖动',
   BAD_TICK: '坏点',
-  QUARANTINE_CONFIRMED: '隔离确认',
-  QUARANTINE_DROPPED: '隔离丢弃',
 }
 
 export const MD_EVENT_TONE: Partial<Record<MdEventKind, StatusTone>> = {
@@ -356,9 +352,7 @@ export const MD_EVENT_TONE: Partial<Record<MdEventKind, StatusTone>> = {
   MD_DOWN: 'critical',
   MD_RECOVERED: 'good',
   MD_INTEGRITY: 'critical',
-  MD_FLAPPING: 'serious',
   BAD_TICK: 'serious',
-  QUARANTINE_DROPPED: 'warning',
 }
 
 export const EXCHANGE_LABELS: Record<string, string> = { SHFE: '上期所', DCE: '大商所', CFFEX: '中金所', INE: '能源中心', CZCE: '郑商所', GFEX: '广期所' }

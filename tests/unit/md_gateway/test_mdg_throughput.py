@@ -1,7 +1,7 @@
 """Throughput regression check (M6, non-strict): Feed A frames straight into a running md-gateway.
 
 Frames go through the whole hot path - typed JSON decode, sequence tracking, normalizer,
-validator, arbiter, raw recording hand-off, bars and the ZeroMQ publish - with the timer
+validator, arbiter, raw recording hand-off and the ZeroMQ publish - with the timer
 loop and the recorder thread running. The bound is deliberately loose (shared CI hosts);
 the measured rate is printed (``-s``) for comparison with the review numbers (~11-12k msg/s
 on the development machine, up from ~4-6k).

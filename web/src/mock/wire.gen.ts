@@ -82,29 +82,6 @@ export const WIRE: Record<string, WireStruct> = {
   "nested": {},
   "omit": true
  },
- "Bar": {
-  "defaults": {
-   "quality": "OK",
-   "version": 1
-  },
-  "nested": {},
-  "omit": true
- },
- "BarsBatch": {
-  "defaults": {},
-  "nested": {
-   "bars": "Bar"
-  },
-  "omit": true
- },
- "BarsRequest": {
-  "defaults": {
-   "from_ns": null,
-   "to_ns": null
-  },
-  "nested": {},
-  "omit": true
- },
  "BrokerOrderBatch": {
   "defaults": {},
   "nested": {
@@ -256,6 +233,7 @@ export const WIRE: Record<string, WireStruct> = {
  "ExposureView": {
   "defaults": {
    "cap_pct": null,
+   "quality": null,
    "utilization": null
   },
   "nested": {},
@@ -707,6 +685,8 @@ export const WIRE: Record<string, WireStruct> = {
  "RuleStatus": {
   "defaults": {
    "active_level": null,
+   "hard_level": null,
+   "hard_utilization": null,
    "headroom_money": null,
    "next_level": null,
    "next_threshold": null,
@@ -959,22 +939,6 @@ export const WIRE: Record<string, WireStruct> = {
    "pre_close": null,
    "pre_open_interest": null,
    "source_seq": null
-  },
-  "nested": {},
-  "omit": true
- },
- "TickBatch": {
-  "defaults": {
-   "next_from_ns": null
-  },
-  "nested": {
-   "ticks": "Tick"
-  },
-  "omit": true
- },
- "TicksQuery": {
-  "defaults": {
-   "modes": null
   },
   "nested": {},
   "omit": true

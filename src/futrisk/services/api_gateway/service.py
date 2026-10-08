@@ -385,7 +385,7 @@ class ApiGatewayService:
         rt = self.rt
         eps = rt.endpoints
         plan: list[tuple[str, list[str]]] = [
-            (MD_GATEWAY, ["md.tick.", "md.bar.1m.", "md.status", "md.event"]),
+            (MD_GATEWAY, ["md.tick.", "md.status", "md.event"]),
             (TRADE_GATEWAY, ["td.exec.", "td.status"]),
             *[(inst, ["risk.", "oms.order.", "sys.dayroll"]) for inst in rt.config.services.risk_instances()],
             (CLEARING, ["sys.eod", "clearing.settled", "report.ready", "backtest.status"]),

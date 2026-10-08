@@ -709,8 +709,7 @@ export class MockEngine {
     ev('GAP_OPEN', t(9, 47, 25), { source: 'FEED_A', gap: { gap_id: gapId, source: 'FEED_A', epoch, from_seq: 18842, to_seq: 18901, from_ns: t(9, 47, 7), status: 'OPEN' } })
     ev('GAP_FILLED', t(9, 47, 26), { source: 'FEED_A', gap: { gap_id: gapId, source: 'FEED_A', epoch, from_seq: 18842, to_seq: 18901, from_ns: t(9, 47, 7), to_ns: t(9, 47, 25), status: 'FILLED', filled: 60, duplicates: 0, unrecoverable: 0 } })
     ev('SOURCE_STATE', t(9, 47, 36), { source: 'FEED_A', from_state: 'PROBATION', to_state: 'TRUSTED', detail: { reason: 'CAUGHT_UP', same_volume_matches: 3 } })
-    ev('BAD_TICK', t(10, 5, 41), { source: 'FEED_B', instrument_id: 'j2701', detail: { reason: 'MD_QUARANTINE_SPIKE', price: 1692.5, offset_pct: 0.021 } })
-    ev('QUARANTINE_DROPPED', t(10, 5, 43), { source: 'FEED_B', instrument_id: 'j2701', detail: { reason: 'NOT_CONFIRMED_2S' } })
+    ev('BAD_TICK', t(10, 5, 41), { source: 'FEED_B', instrument_id: 'j2701', detail: { reason: 'MD_REJECT_PRICE_WITHOUT_TRADE', price: 1692.5, offset_pct: 0.021 } })
     this.mdEvents.sort((a, b) => b.ts_ns - a.ts_ns)
     const sa = this.sources[0]
     if (sa) sa.sinceNs = t(9, 47, 36)
@@ -2771,8 +2770,16 @@ export class MockEngine {
         clean = { instrument: inst, offset_pct: off, with_volume: Boolean(params.with_volume) }
         const i = this.inst.get(inst)
         const src: SourceId = t === 'feed_b' ? 'FEED_B' : 'FEED_A'
-        this.mdEvent('BAD_TICK', { source: src, instrument_id: inst, detail: { reason: 'MD_QUARANTINE_SPIKE', price: i ? roundTick(i.last * (1 + off), i.spec.tick) : null, offset_pct: off, with_volume: Boolean(params.with_volume) } })
-        setTimeout(() => this.mdEvent('QUARANTINE_DROPPED', { source: src, instrument_id: inst, detail: { reason: 'NOT_CONFIRMED_2S' } }), 2000)
+        // md-gateway's validator (services/md_gateway/validator.py): a price move without a volume change is
+        // MD_REJECT_PRICE_WITHOUT_TRADE, a price outside the limits MD_REJECT_PRICE_LIMIT; a print inside the
+        // limits that comes with volume passes validation (no BAD_TICK)
+        const price = i ? roundTick(i.last * (1 + off), i.spec.tick) : null
+        const reason = !params.with_volume
+          ? 'MD_REJECT_PRICE_WITHOUT_TRADE'
+          : i && price !== null && (price > i.upper || price < i.lower)
+            ? 'MD_REJECT_PRICE_LIMIT'
+            : null
+        if (reason) this.mdEvent('BAD_TICK', { source: src, instrument_id: inst, detail: { reason, price, offset_pct: off, with_volume: Boolean(params.with_volume) } })
         lifetime = durationS ?? 2.5
         break
       }

@@ -8,9 +8,9 @@ Each test starts a sim-exchange (50 ms ticks) and a real md-gateway runtime:
 - SIM_RESTART (EPOCH_CHANGED) end to end; Feed A reorder beyond the 32-message buffer, duplicates and a gap;
   Feed B serving older snapshots and duplicate bodies;
 - demo clock jumps into breaks raise no false alarms;
-- M7: all sources lost -> ``all:{from_ns}`` gap, closed at the next bootstrap; a Feed B poll outage -> ``feed_b:`` gap;
+- M7: all sources lost -> ``all:{from_ns}`` gap, closed when a source is trusted again; a Feed B poll outage -> ``feed_b:`` gap;
 - the Sina COARSE_TS rule through the whole service;
-- config: non-arbitration feeds.yaml changes are vetoed, products are staged for the next trading day.
+- config: only the arbitration parameters of feeds.yaml apply at run time; everything else needs a restart.
 """
 
 from __future__ import annotations
@@ -29,12 +29,11 @@ from futrisk.common.clock import BJ, NS_PER_S
 from futrisk.common.config import FullConfig
 from futrisk.common.ids import uuid7
 from futrisk.common.paths import HomeLayout
-from futrisk.marketdata.sina import SinaNormalizer, resolve_sina_instruments
 from futrisk.messages.enums import GapStatus, MdQuality, SourceId, SourceState, TickMode
 from futrisk.messages.md import FLAG_COARSE_TS, FLAG_WM_RESET, SourceControl, Tick
 from futrisk.runtime import AsyncServiceRuntime
-from futrisk.services.md_gateway.model import Incoming
 from futrisk.services.md_gateway.service import MdGatewayService
+from futrisk.services.md_gateway.sina import SinaDecoder, resolve_sina_instruments, split_response
 from futrisk.sim.exchange import SimExchange
 from futrisk.sim.exchange.testing import MARKET_OPEN, offset_for
 
@@ -206,7 +205,7 @@ async def test_demo_clock_jumps_raise_no_false_alarms(default_config: FullConfig
         assert monotonic_or_reset(env.col.ticks) == []
 
 
-async def test_all_sources_lost_opens_an_all_gap_closed_at_the_bootstrap(default_config: FullConfig, tmp_path: Path) -> None:
+async def test_all_sources_lost_opens_an_all_gap_closed_when_a_source_is_trusted_again(default_config: FullConfig, tmp_path: Path) -> None:
     """M7: ``all:{from_ns}`` (source null) while no source is trusted; a Feed B poll outage is ``feed_b:{from_ns}``."""
     async with running(default_config, tmp_path) as env:
         await env.ex.faults.add("FEED_DISCONNECT", "feed_a", {"refuse_reconnect_s": 2.0})
@@ -268,43 +267,40 @@ async def test_sina_coarse_timestamps_only_advance_live_on_a_volume_increase(def
         latest = svc.arbiter.state("rb2701").latest
         assert wm is not None and latest is not None
         px = latest.last
-        norm = SinaNormalizer(resolve_sina_instruments(env.cfg.products, env.cfg.feeds.sina.symbols), env.cfg.calendar)
+        decoder = SinaDecoder(svc.normalizer, resolve_sina_instruments(env.cfg.products, env.cfg.feeds.sina.symbols))
         n0 = len(env.col.ticks)
         modes = []
         for dv in (0, 0, 7):
             now_ns = svc.clock.now_ns()
             now = datetime.fromtimestamp(now_ns / NS_PER_S, tz=BJ)
-            text = _sina_body(norm.instruments, now, {"rb2701": (px, wm[1] + dv)})
-            (res,) = norm.normalize_text(text, now_ns, ["nf_RB2701"])
-            assert res.ok and res.tick is not None and res.tick.flags & FLAG_COARSE_TS
-            svc.on_incoming(Incoming(SINA, now_ns, svc.clock.monotonic_ns(), tick=res.tick))
+            text = _sina_body(decoder.instruments, now, {"rb2701": (px, wm[1] + dv)})
+            inc = decoder.incoming("nf_RB2701", split_response(text).payloads["nf_RB2701"], now_ns, svc.clock.monotonic_ns())
+            assert inc.reject_reason is None and inc.tick is not None and inc.tick.flags & FLAG_COARSE_TS
+            svc.on_incoming(inc)
             modes.append(svc.pipeline.last_outcome)
             await asyncio.sleep(1.05)
         assert modes[0] != str(TickMode.LIVE) and modes[1] != str(TickMode.LIVE) and modes[2] == str(TickMode.LIVE)
         await eventually(lambda: any(t.source is SINA for t in env.col.ticks[n0:]), 3, what="Sina LIVE tick published")
 
 
-async def test_config_changes_outside_arbitration_are_vetoed_and_products_are_staged(default_config: FullConfig, tmp_path: Path) -> None:
-    """L2: feeds.yaml changes other than 'arbitration' need a restart; products apply at the next trading day."""
+async def test_config_changes_outside_arbitration_are_vetoed(default_config: FullConfig, tmp_path: Path) -> None:
+    """feeds.yaml changes other than 'arbitration', products.yaml and the calendar need a restart."""
     async with running(default_config, tmp_path, both=False) as env:
         svc = env.svc
         cur = env.cfg
         slower = dataclasses.replace(cur, feeds=cur.feeds.model_copy(update={"feed_b": cur.feeds.feed_b.model_copy(update={"poll_ms": 500})}))
         errors = svc._validate_config(cur, slower)
-        assert errors and "feed_b.poll_ms" in errors[0] and "restart required" in errors[0]
+        assert errors and "feeds.feed_b" in errors[0] and "restart required" in errors[0]
         arb = dataclasses.replace(cur, feeds=cur.feeds.model_copy(update={"arbitration": cur.feeds.arbitration.model_copy(update={"stale_s": 9.0})}))
         assert svc._validate_config(cur, arb) == []
         svc._on_config_commit(arb, {})
         assert svc.params.arb.stale_s == 9.0 and svc.validator._p.arb.stale_s == 9.0  # noqa: SLF001
         rb = cur.products.products["rb"]
         products = cur.products.model_copy(update={"products": {**cur.products.products, "rb": rb.model_copy(update={"multiplier": 20})}})
-        staged = dataclasses.replace(cur, products=products)
-        svc._on_config_commit(staged, {})
-        assert svc._staged is not None and svc._staged[1] > svc.current_td()
-        assert svc.products.products["rb"].multiplier == 10  # not yet
-        svc._staged = (staged, svc.current_td())  # the trading day came
-        svc._apply_staged()
-        assert svc.products.products["rb"].multiplier == 20 and svc.registry.multiplier("rb2701") == 20
+        errors = svc._validate_config(cur, dataclasses.replace(cur, products=products))
+        assert errors and "products.yaml" in errors[0] and "restart required" in errors[0]
+        errors = svc._validate_config(cur, dataclasses.replace(cur, files={**cur.files, "calendar.yaml": "changed"}))
+        assert errors and "calendar" in errors[0]
 
 
 async def test_restart_inside_the_watermark_flush_interval_republishes_nothing(default_config: FullConfig, tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""Market routes: quotes, bars, feeds, events, data-source control (02 §9.6)."""
+"""Market routes: quotes, feeds, events, data-source control (02 §9.6)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from starlette.responses import Response
 from futrisk.messages import codes
 from futrisk.messages.base import to_builtins
 from futrisk.messages.enums import MdEventKind, SourceId
-from futrisk.messages.md import BarsRequest, MdEventsQuery, SourceControl, SourcesRequest
+from futrisk.messages.md import MdEventsQuery, SourceControl, SourcesRequest
 from futrisk.services.api_gateway.auth import Perm, Principal
 from futrisk.services.api_gateway.gateway import Gateway
 from futrisk.services.api_gateway.models import SourceBody
@@ -36,12 +36,6 @@ def build(gw: Gateway) -> APIRouter:
         ticks = gw.readmodel.ticks
         names = sorted(ticks) if wanted is None else [i for i in wanted if i in ticks]
         return ApiResult.success([to_builtins(ticks[n]) for n in names]).response()
-
-    @r.get("/market/bars", response_model=Envelope, summary="1-minute bars (md.bars)")
-    async def bars(instrument: str = Query(...), td: str | None = Query(None, pattern=r"^\d{8}$"),
-                   from_ns: int | None = None, to_ns: int | None = None, p: Principal = read) -> Response:
-        req = BarsRequest(instrument_id=instrument, trading_day=td or gw.trading_day(), from_ns=from_ns, to_ns=to_ns)
-        return ApiResult.from_reply(await gw.router.request(MD_GATEWAY, "md.bars", req)).response()
 
     @r.get("/market/feeds", response_model=Envelope,
            summary="Source trust states and instrument quality (md.status) + stale/age_ms of md-gateway")

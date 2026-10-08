@@ -9,10 +9,10 @@ from typing import Any
 import msgspec
 
 from futrisk.common.clock import BJ, NS_PER_MS, NS_PER_S, bj_to_ns
-from futrisk.marketdata.fingerprint import tick_fingerprint
 from futrisk.messages.enums import Exchange, MdEventKind, SourceId, TickMode
 from futrisk.messages.md import Tick
 from futrisk.services.md_gateway.model import Incoming
+from futrisk.services.md_gateway.normalizer import tick_fingerprint
 
 #: Monday 2026-09-28 09:35 Beijing: every product is in a continuous session
 T0 = bj_to_ns(datetime(2026, 9, 28, 9, 35, tzinfo=BJ))

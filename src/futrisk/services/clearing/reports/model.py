@@ -675,11 +675,7 @@ def data_quality(b: ReportBundle) -> dict[str, Any]:
         unrecoverable = sum(
             e.gap.unrecoverable for e in evs if e.kind == MdEventKind.GAP_UNRECOVERABLE and e.gap is not None
         )
-        bad = sum(
-            1
-            for e in evs
-            if e.kind in (MdEventKind.BAD_TICK, MdEventKind.QUARANTINE_DROPPED, MdEventKind.QUARANTINE_CONFIRMED)
-        )
+        bad = sum(1 for e in evs if e.kind == MdEventKind.BAD_TICK)
         avail = None
         if open_ns and close_ns and close_ns > open_ns:
             down = ZERO

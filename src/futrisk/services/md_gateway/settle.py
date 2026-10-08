@@ -1,33 +1,18 @@
 """Settlement-price inputs from canonical ticks (01 §8.13 last bullet, §8.15, 02 §6.2/§7.1, 03 §4.1).
 
-Everything is derived from **cumulative** values of the day's states, so gaps in the
-middle of the day do not matter:
-
-- **corroborated states only** (C1): a state followed (in exchange time) by a state with
-  a lower cumulative volume was an outlier and is ignored, so one bad state can never
-  become the day's "last" state; turnover-based values prefer states with exact turnover
-  (Sina only estimates it, ``COARSE_TS`` rows are used only when nothing else exists);
-- full day (SHFE/DCE ``VWAP_FULL_DAY``): ``day_volume`` / ``day_turnover`` of the day's
-  last state, ``vwap_raw = turnover / (volume × multiplier)``;
-- last hour (CFFEX ``VWAP_LAST_HOUR``, the product's ``settle_window``: IF 14:00-15:00,
-  T 14:15-15:15): window values are the difference between the last state of the window
-  and the **boundary state** (the last state before the window start, as the exchange
-  snapshot would have it). ``quality = APPROX`` when a boundary state is missing, when it
-  lies more than one feed interval (500 ms) before the window start while a significant
-  volume (> 0.2 % of the window) traded between it and the first state in the window (the
-  split is unknown), when no state is near the window end yet (e.g. intraday), or when a
-  boundary state comes from BACKFILL (01 §8.13, 02 §7.1);
-- ``hourly`` (CFFEX): ``{segment_start_ns: [volume, turnover]}`` over the trading-hour
-  segments of :func:`futrisk.core.settle_price.trading_hour_segments`, for the
-  hour-by-hour fallback: every state-to-state increment is attributed to the segment of
-  the later state; a closing snapshot stamped within the close grace after a segment end
-  belongs to the segment that just ended; opening-auction states belong to the first
-  segment (the same attribution as :func:`futrisk.core.settle_price.trading_hour_buckets`
-  for a trade tape). The buckets always sum to ``day_volume`` / ``day_turnover``;
-- ``limit_lock``: UP / DOWN when every state of the last 5 minutes before the close (and
-  the last one before them) was locked at that limit;
-- ``last`` / ``bid1`` / ``ask1`` / ``pre_settle`` from the last corroborated state;
-  ``NO_TRADE`` when the relevant volume (day, or window for the last-hour method) is zero.
+Everything derives from **cumulative** values of the day's states, so gaps in the middle of the
+day do not matter, and only from **corroborated** states (a state followed by one with a lower
+cumulative volume was an outlier); turnover-based values prefer exact-turnover states (Sina
+only estimates it). Full day (``VWAP_FULL_DAY``): ``day_volume`` / ``day_turnover`` of the last
+state. Last hour (CFFEX ``VWAP_LAST_HOUR``, the product's ``settle_window``): window values are
+the difference between the last state of the window and the **boundary state** (the last one
+before the window start); ``quality = APPROX`` when the boundary state is missing, lies more
+than one feed interval before the start while a significant volume traded in between, comes
+from BACKFILL, or no state is near the window end yet. ``hourly`` (CFFEX): ``{segment_start_ns:
+[volume, turnover]}`` over the trading-hour segments for the hour-by-hour fallback (every
+increment goes to the segment of the later state; closing snapshots to the segment just ended;
+auction states to the first). ``limit_lock``: UP / DOWN when every state of the last 5 minutes
+was locked; ``NO_TRADE`` when the relevant volume is zero.
 """
 
 from __future__ import annotations

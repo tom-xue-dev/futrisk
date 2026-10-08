@@ -5,7 +5,7 @@
     (never on md.tick), no duplicate md.tick, GAP_OPEN + GAP_FILLED (0 duplicates);
 (c) all feeds down: STALE then UNKNOWN, exactly one MD_DOWN per instrument, MD_RECOVERED after;
 (d) restart: resume from feed_cursors / watermarks, nothing old republished as LIVE;
-(e) md.settle_inputs for rb2701 (full-day VWAP) and IF2612 (last hour from 14:00).
+(e) md.settle_inputs for rb2701 (full-day VWAP) and IF2612 (last hour from 14:00), md.sources, maintenance.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from futrisk.common.clock import BJ, bj_to_ns
 from futrisk.common.config import FullConfig
 from futrisk.common.ids import uuid7
 from futrisk.common.paths import HomeLayout
-from futrisk.marketdata.recorder import read_shards
 from futrisk.messages.enums import (
     GapStatus,
     MdQuality,
@@ -34,11 +33,8 @@ from futrisk.messages.enums import (
     SettleMethod,
     SourceId,
     SourceState,
-    TickMode,
 )
 from futrisk.messages.md import (
-    BarsBatch,
-    BarsRequest,
     MdEventBatch,
     MdEventsQuery,
     MdStatus,
@@ -46,10 +42,9 @@ from futrisk.messages.md import (
     SettleInputsRequest,
     SourceControl,
     SourcesRequest,
-    TickBatch,
-    TicksQuery,
 )
 from futrisk.services.md_gateway.recording import day_shards
+from futrisk.services.md_gateway.shards import read_shards
 from futrisk.sim.exchange import SimExchange
 from futrisk.sim.exchange.testing import MARKET_OPEN, offset_for
 
@@ -84,7 +79,7 @@ async def test_normal_flow_and_feed_a_outage_failover(default_config: FullConfig
         col = Collector(cfg.services.instances["md-gateway"].pub or "")
         rt, svc = await start_md(cfg, tmp_path / "md", offset, ex.feed_a_url, ex.feed_b_url, fast_params())
         try:
-            # (a) both sources become trusted (bootstrap + probation) and every instrument gets LIVE ticks
+            # (a) both sources become trusted (probation) and every instrument gets LIVE ticks
             await eventually(lambda: trusted(svc, SourceId.FEED_A) and trusted(svc, SourceId.FEED_B), 15, what="both trusted")
             await eventually(lambda: {t.instrument_id for t in col.ticks} >= set(SIM_INSTRUMENTS), 10, what="LIVE ticks for all")
             assert all(t.source in (SourceId.FEED_A, SourceId.FEED_B) for t in col.ticks)
@@ -95,7 +90,7 @@ async def test_normal_flow_and_feed_a_outage_failover(default_config: FullConfig
             await eventually(lambda: rt.state == ServiceState.RUNNING, 3, what="RUNNING")
             hb = rt.build_heartbeat()
             assert hb.latency_us["decode_to_publish"].n > 0 and hb.deps["FEED_A"] == "UP"
-            assert {"recorder_rows", "open_gaps", "quarantined"} <= set(hb.queues)
+            assert {"recorder_rows", "open_gaps", "feed_a_held"} <= set(hb.queues)
 
             # (b) Feed A outage of ~2 s with Feed B up
             n_before = len(col.ticks)
@@ -129,16 +124,14 @@ async def test_normal_flow_and_feed_a_outage_failover(default_config: FullConfig
             await eventually(lambda: len(col.events_of("GAP_FILLED")) > n_gaps, 10, what="in-connection hole repaired")
             hole = col.events_of("GAP_FILLED")[-1]
             assert hole.gap is not None and hole.detail.get("kind") in ("hole", "tail") and hole.gap.filled >= 1
-            # bad ticks never reach md.tick: one without a trade (rejected), one with a trade (spike, dropped)
+            # a bad tick without a trade never reaches md.tick (01 §8.13: the price only changes with a trade)
             await ex.faults.add("BAD_TICK", "feed_a", {"instrument": "rb2701", "offset_pct": 0.04, "with_volume": False})
-            await ex.faults.add("BAD_TICK", "feed_a", {"instrument": "hc2701", "offset_pct": 0.04, "with_volume": True})
-            await eventually(lambda: bool(col.events_of("QUARANTINE_DROPPED", "hc2701")), 5, what="spike dropped")
             await eventually(lambda: bool(col.events_of("BAD_TICK", "rb2701")), 5, what="bad tick rejected")
             await asyncio.sleep(0.5)
-            for iid in ("rb2701", "hc2701"):
-                prices = [t.last for t in col.ticks if t.instrument_id == iid]
-                steps = [abs(b - a) / a for a, b in zip(prices, prices[1:], strict=False)]
-                assert max(steps) < 0.02, f"{iid}: a bad price reached md.tick"
+            prices = [t.last for t in col.ticks if t.instrument_id == "rb2701"]
+            steps = [abs(b - a) / a for a, b in zip(prices, prices[1:], strict=False)]
+            assert max(steps) < 0.02, "a bad price reached md.tick"
+            assert trusted(svc, SourceId.FEED_A)  # one bad tick is far below the reject rate
             assert_strictly_increasing(col.ticks)
             keys = [(t.instrument_id, t.trading_day, t.volume, t.exch_ts_ns) for t in col.ticks]
             assert len(keys) == len(set(keys)), "duplicate md.tick"
@@ -183,7 +176,7 @@ async def test_all_feeds_down_stale_unknown_single_md_down_and_recovery(default_
         col = Collector(cfg.services.instances["md-gateway"].pub or "")
         rt, svc = await start_md(cfg, tmp_path / "md", offset, ex.feed_a_url, ex.feed_b_url, fast_params())
         try:
-            await eventually(lambda: trusted(svc, SourceId.FEED_A), 15, what="bootstrap")
+            await eventually(lambda: trusted(svc, SourceId.FEED_A), 15, what="A trusted")
             await eventually(lambda: all(svc.quality.quality(i) is MdQuality.OK for i in SIM_INSTRUMENTS), 10, what="all OK")
             assert rt.state == ServiceState.RUNNING
             await ex.faults.add("FEED_DISCONNECT", "feed_a", {"refuse_reconnect_s": 3.5})
@@ -199,8 +192,8 @@ async def test_all_feeds_down_stale_unknown_single_md_down_and_recovery(default_
                 assert len(col.events_of("MD_DOWN", iid)) == 1, iid
                 assert len(col.events_of("MD_RECOVERED", iid)) == 1, iid
             assert not col.events_of("MD_DOWN", UNSIMULATED)  # configured but never observed: no events
-            boot = [e for e in col.events_of("SOURCE_STATE") if e.detail.get("bootstrap")]
-            assert len(boot) >= 2  # start-up and after the full outage
+            promotions = [e for e in col.events_of("SOURCE_STATE") if e.to_state == "TRUSTED"]
+            assert len(promotions) >= 3  # start-up (both) and after the full outage
             assert_strictly_increasing(col.ticks)
         finally:
             await rt.stop()
@@ -215,7 +208,7 @@ async def test_restart_resumes_from_cursor_and_watermarks(default_config: FullCo
         col = Collector(cfg.services.instances["md-gateway"].pub or "")
         rt, svc = await start_md(cfg, home, offset, ex.feed_a_url, ex.feed_b_url, fast_params())
         try:
-            await eventually(lambda: trusted(svc, SourceId.FEED_A), 15, what="bootstrap")
+            await eventually(lambda: trusted(svc, SourceId.FEED_A), 15, what="A trusted")
             await eventually(lambda: {t.instrument_id for t in col.ticks} >= set(SIM_INSTRUMENTS), 10, what="LIVE ticks")
             await asyncio.sleep(1.5)  # a durable cursor (raw shard on disk) exists
         finally:
@@ -265,26 +258,13 @@ async def test_settle_inputs_for_rb_and_if(default_config: FullConfig, tmp_path:
             assert fi.quality == SettleInputQuality.APPROX  # the 14:00-15:00 window is not over yet
             assert fi.hourly
             assert (svc.layout.ticks_canonical_dir / f"{TD}.parquet").exists()
-            # the 13:59 bar closed at 14:00:01 (bar_close_grace 1 s in the tests) and is queryable
-            minute = bj_to_ns(datetime(2026, 9, 28, 13, 59, tzinfo=BJ))
-            bars: list = []
-            for _ in range(40):  # published within a second of 14:00:03
-                bars_reply = await client.request("md-gateway", "md.bars", BarsRequest(instrument_id="rb2701", trading_day=TD))
-                assert bars_reply.ok
-                bars = bars_reply.open_as(BarsBatch).bars
-                if bars:
-                    break
-                await asyncio.sleep(0.1)
-            assert [b.minute_start_ns for b in bars][:1] == [minute] and bars[0].volume > 0 and bars[0].version >= 1
-            ticks_reply = await client.request(
-                "md-gateway",
-                "md.ticks",
-                TicksQuery(instrument_id="IF2612", trading_day=TD, from_ns=minute, to_ns=window_start + 10**10, modes=[TickMode.LIVE, TickMode.BACKFILL]),
-            )
-            assert ticks_reply.ok
-            got = ticks_reply.open_as(TickBatch).ticks
-            assert got and all(t.instrument_id == "IF2612" for t in got)
-            assert [t.exch_ts_ns for t in got] == sorted(t.exch_ts_ns for t in got)
+            # asked again a little later: a new version only when the values changed
+            await asyncio.sleep(0.5)
+            again = await client.request("md-gateway", "md.settle_inputs", SettleInputsRequest(trading_day=TD, instruments=["rb2701"]), timeout_ms=10_000)
+            rb2 = again.open_as(SettleInputsBatch).items[0]
+            assert (rb2.version == 1) == (rb2.day_volume == rb.day_volume)
+            bad = await client.request("md-gateway", "md.settle_inputs", SettleInputsRequest(trading_day="2026-09-28"))
+            assert not bad.ok and bad.code == "BAD_REQUEST"
             src_reply = await client.request("md-gateway", "md.sources", SourcesRequest())
             assert {s.source for s in src_reply.open_as(MdStatus).sources} == {SourceId.FEED_A, SourceId.FEED_B}
             # daily maintenance (sys.eod DONE): checkpoint + backup + purges, while the service keeps running
@@ -295,7 +275,7 @@ async def test_settle_inputs_for_rb_and_if(default_config: FullConfig, tmp_path:
             await rt.stop()
 
 
-async def test_bootstrap_while_the_market_is_closed(default_config: FullConfig, tmp_path: Path) -> None:
+async def test_promotion_while_the_market_is_closed(default_config: FullConfig, tmp_path: Path) -> None:
     """At lunch nothing trades: the sources are still promoted (nothing to catch up with) and nothing is LIVE."""
     cfg = md_config(default_config)
     offset = offset_for(datetime(2026, 9, 28, 12, 0, tzinfo=BJ))
@@ -303,7 +283,7 @@ async def test_bootstrap_while_the_market_is_closed(default_config: FullConfig, 
         col = Collector(cfg.services.instances["md-gateway"].pub or "")
         rt, svc = await start_md(cfg, tmp_path / "md", offset, ex.feed_a_url, ex.feed_b_url, fast_params())
         try:
-            await eventually(lambda: trusted(svc, SourceId.FEED_A), 10, what="bootstrap in a break")
+            await eventually(lambda: trusted(svc, SourceId.FEED_A), 10, what="promotion in a break")
             assert rt.state == ServiceState.RUNNING
             await asyncio.sleep(0.5)
             assert not col.ticks and not col.events_of("MD_DOWN")

@@ -1,4 +1,4 @@
-"""Raw recording, durable cursors, canonical build and md.ticks paging (03 §5.1, 02 §6.2)."""
+"""Raw recording, durable cursors and the canonical day build (03 §5.1)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from futrisk.common.clock import SystemClock
-from futrisk.marketdata.recorder import list_shards
 from futrisk.messages.enums import SourceId, TickMode
-from futrisk.messages.md import TicksQuery
-from futrisk.services.md_gateway.commands import _page
 from futrisk.services.md_gateway.recording import (
     TickRecorder,
     build_canonical,
@@ -20,6 +17,7 @@ from futrisk.services.md_gateway.recording import (
     reject_row,
     tick_row,
 )
+from futrisk.services.md_gateway.shards import list_shards
 
 from .helpers import MS, T0, TD, as_source, tick
 
@@ -30,7 +28,7 @@ async def test_recorder_writes_shards_and_marks_cursor_durable_only_when_flushed
     rec = TickRecorder(tmp_path / "raw", sources=[A, B], wall_clock=SystemClock(), epoch_ms=1, roll_s=3600, roll_rows=10_000)
     t = tick(seq=1)
     rec.add(A, TD, tick_row(t, TickMode.LIVE, None, "E1"))
-    rec.add(A, TD, reject_row(instrument_id="rb2701", exchange="SHFE", trading_day=TD, recv_ns=T0, source=A, reason="MD_REJECT_MALFORMED", epoch="E1", seq=2))
+    rec.add(A, TD, reject_row(instrument_id="rb2701", exchange="SHFE", trading_day=TD, recv_ns=T0, source="FEED_A", reject_reason="MD_REJECT_MALFORMED", epoch="E1", seq=2))
     await rec.handoff({A: ("E1", 2)})
     assert A not in rec.durable  # still buffered in the writer (roll not due)
     assert list_shards(tmp_path / "raw", TD, "feed_a") == []
@@ -42,6 +40,7 @@ async def test_recorder_writes_shards_and_marks_cursor_durable_only_when_flushed
     assert table.num_rows == 2
     assert table.column("mode").to_pylist() == ["LIVE", "REJECTED"]
     assert table.column("reject_reason").to_pylist() == [None, "MD_REJECT_MALFORMED"]
+    assert table.column("source_seq").to_pylist() == [1, 2] and table.column("epoch").to_pylist() == ["E1", "E1"]
     await rec.close({})
 
 
@@ -71,39 +70,8 @@ async def test_canonical_dedupes_by_fingerprint_preferring_live_and_is_rebuilt_w
     await rec.close({})
 
 
-async def test_tick_pages_do_not_split_timestamp_groups(tmp_path: Path) -> None:
-    import futrisk.services.md_gateway.commands as cmds
-
-    raw = tmp_path / "raw"
-    rec = TickRecorder(raw, sources=[A], wall_clock=SystemClock(), epoch_ms=1)
-    for i in range(1, 8):
-        mode = TickMode.BACKFILL if i % 2 else TickMode.LIVE
-        rec.add(A, TD, tick_row(tick(seq=i, volume=100 + i, ts=T0 + i * 100 * MS), mode, None, "E1"))
-    await rec.handoff({}, flush=True)
-    from futrisk.marketdata.recorder import read_shards
-
-    table = read_shards(day_shards(raw, TD, [A]))
-    old = cmds.TICKS_PAGE
-    cmds.TICKS_PAGE = 2
-    try:
-        q = TicksQuery(instrument_id="rb2701", trading_day=TD, from_ns=T0, to_ns=T0 + 10**12, modes=[TickMode.BACKFILL])
-        seen: list[int] = []
-        batch = _page(table, q, ["BACKFILL"])
-        while True:
-            seen += [t.volume for t in batch.ticks]
-            if batch.next_from_ns is None:
-                break
-            q = TicksQuery(instrument_id="rb2701", trading_day=TD, from_ns=batch.next_from_ns, to_ns=q.to_ns, modes=q.modes)
-            batch = _page(table, q, ["BACKFILL"])
-        assert seen == [101, 103, 105, 107]
-    finally:
-        cmds.TICKS_PAGE = old
-    await rec.close({})
-
-
-# ---------------------------------------------------------------- round 2 (L3, L4, L5, M1)
 async def test_dropped_rows_never_make_a_cursor_durable(tmp_path: Path) -> None:
-    """L4 + L5: the loop-side buffer is bounded; a source that lost rows keeps its old durable cursor."""
+    """The loop-side buffer is bounded; a source that lost rows keeps its old durable cursor."""
     rec = TickRecorder(tmp_path / "raw", sources=[A, B], wall_clock=SystemClock(), epoch_ms=1, max_pending_rows=2)
     for i in range(1, 4):
         rec.add_tick(A, TD, tick(seq=i, volume=100 + i), TickMode.LIVE, None, "E1")
@@ -115,7 +83,7 @@ async def test_dropped_rows_never_make_a_cursor_durable(tmp_path: Path) -> None:
 
 
 async def test_spilled_shards_are_visible_to_the_day_readers(tmp_path: Path) -> None:
-    """L5: when the raw directory cannot be written the rows go to the spill root, and the canonical build reads them."""
+    """When the raw directory cannot be written the rows go to the spill root, and the canonical build reads them."""
     raw, spill = tmp_path / "raw", tmp_path / "spill"
     raw.mkdir()
     (raw / TD).write_text("not a directory")  # the day folder cannot be created
@@ -129,7 +97,7 @@ async def test_spilled_shards_are_visible_to_the_day_readers(tmp_path: Path) -> 
 
 
 async def test_canonical_keeps_quote_reversions_and_drops_coarse_copies(tmp_path: Path) -> None:
-    """M1: the same fingerprint at a later time is another market state; a Sina copy of a known state is redundant."""
+    """The same fingerprint at a later time is another market state; a Sina copy of a known state is redundant."""
     import msgspec
 
     from futrisk.messages.md import FLAG_COARSE_TS
@@ -149,20 +117,3 @@ async def test_canonical_keeps_quote_reversions_and_drops_coarse_copies(tmp_path
     df = read_canonical(build_canonical(raw, tmp_path / "canonical", TD, [A, B, sina], {"FEED_A": 1, "FEED_B": 2, "SINA": 3}))
     assert list(df["exch_ts_ns"]) == [T0, T0 + 500 * MS, T0 + 1000 * MS]
     assert set(df["source"].astype(str)) == {"FEED_A"}
-
-
-async def test_shard_cache_reads_only_new_shards(tmp_path: Path) -> None:
-    """L3: paging md.ticks never re-reads the whole day."""
-    from futrisk.services.md_gateway.recording import ShardCache
-
-    raw = tmp_path / "raw"
-    rec = TickRecorder(raw, sources=[A], wall_clock=SystemClock(), epoch_ms=1)
-    rec.add_tick(A, TD, tick(seq=1, volume=100), TickMode.LIVE, None, "E1")
-    await rec.handoff({}, flush=True)
-    cache = ShardCache()
-    assert cache.table(TD, day_shards(raw, TD, [A])).num_rows == 1 and cache.reads == 1
-    assert cache.table(TD, day_shards(raw, TD, [A])).num_rows == 1 and cache.reads == 1
-    rec.add_tick(A, TD, tick(seq=2, volume=101, ts=T0 + MS), TickMode.LIVE, None, "E1")
-    await rec.handoff({}, flush=True)
-    assert cache.table(TD, day_shards(raw, TD, [A])).num_rows == 2 and cache.reads == 2
-    await rec.close({})

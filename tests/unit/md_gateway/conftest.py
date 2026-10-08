@@ -1,4 +1,4 @@
-"""Fixtures of the md-gateway tests: selector event loops (zmq.asyncio on Windows), session index, params."""
+"""Fixtures of the md-gateway tests: selector event loops (zmq.asyncio on Windows), session index, normalizer, Sina decoder."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pytest
 from futrisk.common.config import FullConfig
 from futrisk.services.md_gateway.normalizer import Normalizer
 from futrisk.services.md_gateway.sessions import SessionIndex
+from futrisk.services.md_gateway.sina import SinaDecoder, resolve_sina_instruments
 
 
 def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> Mapping[str, Callable[[], asyncio.AbstractEventLoop]]:
@@ -25,3 +26,9 @@ def sessions(default_config: FullConfig) -> SessionIndex:
 @pytest.fixture
 def normalizer(default_config: FullConfig, sessions: SessionIndex) -> Normalizer:
     return Normalizer(default_config.products, sessions)
+
+
+@pytest.fixture
+def sina_decoder(default_config: FullConfig, normalizer: Normalizer) -> SinaDecoder:
+    """Decoder over every Sina symbol of the default ``feeds.yaml``."""
+    return SinaDecoder(normalizer, resolve_sina_instruments(default_config.products, default_config.feeds.sina.symbols))
